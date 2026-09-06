@@ -1,7 +1,13 @@
 import math
 import sys
 import os
+
 import matplotlib.pyplot as plt
+
+from src.metrics.igd import calculate_igd
+from src.metrics.gd import calculate_gd
+from src.metrics.hypervolume import calculate_hypervolume
+from src.metrics.spacing import calculate_spacing
 
 sys.path.append(
     os.path.abspath(
@@ -12,17 +18,19 @@ sys.path.append(
     )
 )
 
-from spea2 import spea2,zdt1
+from spea2 import spea2, zdt1
 
-population_size=100
-num_variables=30
-archive_size=100
-generations=250
+population_size = 100
+num_variables = 30
+archive_size = 100
+generations = 250
 
-lower_bound=0.0
-upper_bound=1.0
+lower_bound = 0.0
+upper_bound = 1.0
 
-population,archive=spea2(
+
+
+population, archive = spea2(
     population_size,
     num_variables,
     archive_size,
@@ -31,29 +39,84 @@ population,archive=spea2(
     upper_bound
 )
 
-objectives=[
+objectives = [
     zdt1(solution)
     for solution in archive
 ]
 
-obtained_f1=[
+reference_front = [
+    [
+        i / 1000,
+        1 - math.sqrt(i / 1000)
+    ]
+    for i in range(1001)
+]
+
+igd = calculate_igd(
+    objectives,
+    reference_front
+)
+
+gd = calculate_gd(
+    objectives,
+    reference_front
+)
+
+hv = calculate_hypervolume(
+    objectives,
+    [1.1, 1.1]
+)
+
+spacing = calculate_spacing(
+    objectives
+)
+
+print(f"IGD: {igd}")
+print(f"GD: {gd}")
+print(f"Hypervolume: {hv}")
+print(f"Spacing: {spacing}")
+
+metrics_dir = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "../results/metrics"
+    )
+)
+
+os.makedirs(
+    metrics_dir,
+    exist_ok=True
+)
+
+metrics_file = os.path.join(
+    metrics_dir,
+    "zdt1_metrics.txt"
+)
+
+with open(metrics_file, "w") as file:
+    file.write(f"IGD: {igd}\n")
+    file.write(f"GD: {gd}\n")
+    file.write(f"Hypervolume: {hv}\n")
+    file.write(f"Spacing: {spacing}\n")
+    
+obtained_f1 = [
     objective[0]
     for objective in objectives
 ]
 
-obtained_f2=[
+obtained_f2 = [
     objective[1]
     for objective in objectives
 ]
 
-true_f1=[
-    i/1000
-    for i in range(1001)
+true_f1 = [
+    point[0]
+    for point in reference_front
 ]
 
-true_f2=[
-    1-math.sqrt(f1)
-    for f1 in true_f1
+true_f2 = [
+    point[1]
+    for point in reference_front
 ]
 
 plt.scatter(
@@ -74,7 +137,7 @@ plt.title("SPEA2 on ZDT1")
 plt.legend()
 plt.grid()
 
-results_dir=os.path.abspath(
+results_dir = os.path.abspath(
     os.path.join(
         os.path.dirname(__file__),
         "../results/figures"
