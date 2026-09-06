@@ -5,16 +5,10 @@ A population of candidate solutions is randomly generated within the specified v
 For most ZDT problems:
 
 ```
-```
-
-```
 x_i ∈ [0, 1]
 ```
 
 For ZDT4, mixed bounds are used:
-
-```
-```
 
 ```
 x_1 ∈ [0, 1]
@@ -124,9 +118,6 @@ Two candidate solutions are sampled and the one with better fitness is selected.
 Since SPEA2 minimizes fitness:
 
 ```
-```
-
-```
 lower fitness → better candidate
 ```
 
@@ -139,9 +130,6 @@ The process is repeated until enough parents are available to generate the next 
 The implementation uses **Simulated Binary Crossover (SBX)** for real-valued decision variables.
 
 Parameters used in the experiments:
-
-```
-```
 
 ```
 Crossover probability = 0.9
@@ -165,9 +153,6 @@ P_m = \frac{1}{n}
 where `n` is the number of decision variables.
 
 The polynomial mutation distribution index is:
-
-```
-```
 
 ```
 ηm = 20
@@ -212,9 +197,6 @@ ZDT4 contains many local optima in the decision space.
 It is particularly useful for evaluating an algorithm's ability to avoid local optima and maintain convergence under a limited evaluation budget.
 
 ZDT4 uses mixed decision-variable bounds:
-
-```
-```
 
 ```
 x1 ∈ [0, 1]
@@ -263,9 +245,6 @@ NFE = 25,100
 Each benchmark is executed independently using seeds:
 
 ```
-```
-
-```
 1, 2, 3, ..., 10
 ```
 
@@ -284,16 +263,10 @@ Hypervolume measures the volume of objective space dominated by the obtained Par
 For the experiments, the reference point is:
 
 ```
-```
-
-```
 [1.1, 1.1]
 ```
 
 For minimization:
-
-```
-```
 
 ```
 Higher HV → better
@@ -308,9 +281,6 @@ IGD measures how far the obtained approximation is from a reference Pareto front
 It evaluates both convergence and coverage of the obtained solutions.
 
 ```
-```
-
-```
 Lower IGD → better
 ```
 
@@ -321,10 +291,6 @@ Lower IGD → better
 GD measures the distance from the obtained solutions to the reference Pareto front.
 
 It primarily evaluates convergence.
-
-```
-```
-
 ```
 Lower GD → better
 ```
@@ -336,9 +302,6 @@ Lower GD → better
 Spacing evaluates the distribution and uniformity of solutions along the obtained front.
 
 A smaller spacing value indicates a more uniform distribution.
-
-```
-```
 
 ```
 Lower Spacing → better
@@ -378,19 +341,12 @@ The project stores both individual-run and aggregated experimental results.
 ## Raw Metrics
 
 ```
-```
-
-```
 results/raw_metrics.csv
 ```
 
 This file contains the result of every benchmark/seed combination.
 
 Format:
-
-```
-```
-
 ```
 benchmark,seed,hv,igd,gd,spacing,archive_size,nfe,runtime_seconds
 ```
@@ -400,9 +356,6 @@ There are 10 runs for each benchmark.
 ---
 
 ## Summary Metrics
-
-```
-```
 
 ```
 results/summary_metrics.csv
@@ -514,9 +467,6 @@ ZDT4 is the most difficult benchmark for this implementation under the fixed 25,
 The obtained result is:
 
 ```
-```
-
-```
 HV = 0.000000 ± 0.000000
 IGD = 4.241244 ± 1.832326
 GD = 5.112376 ± 2.231289
@@ -571,9 +521,6 @@ ZDT4 has many local optima and a large search space in variables `x2...xn`.
 Under the fixed:
 
 ```
-```
-
-```
 250 generations
 100 population
 25,100 evaluations
@@ -582,9 +529,6 @@ Under the fixed:
 the implementation does not consistently reach the Pareto-optimal region.
 
 This is reflected by:
-
-```
-```
 
 ```
 HV = 0
@@ -613,9 +557,6 @@ Using 10 independent seeds provides a better estimate of typical behavior.
 The reported format:
 
 ```
-```
-
-```
 mean ± standard deviation
 ```
 
@@ -624,9 +565,6 @@ shows both average performance and run-to-run variability.
 ---
 
 # Project Structure
-
-```
-```
 
 ```
 Spea2_Project/
@@ -671,17 +609,11 @@ Spea2_Project/
 Clone the repository:
 
 ```
-```
-
-```
 git clone https://github.com/CharanSivuku/spea2-multi-objective-optimization.git
 cd spea2-multi-objective-optimization
 ```
 
 Create a virtual environment:
-
-```
-```
 
 ```
 python3 -m venv .venv
@@ -692,25 +624,16 @@ Activate it.
 ### macOS / Linux
 
 ```
-```
-
-```
 source .venv/bin/activate
 ```
 
 ### Windows
 
 ```
-```
-
-```
 .venv\Scripts\activate
 ```
 
 Install dependencies:
-
-```
-```
 
 ```
 pip install -r requirements.txt
@@ -723,16 +646,10 @@ pip install -r requirements.txt
 Run the complete ZDT benchmark experiment:
 
 ```
-```
-
-```
 PYTHONPATH=. python experiments/zdt_benchmarks.py
 ```
 
 The experiment evaluates:
-
-```
-```
 
 ```
 ZDT1
@@ -760,17 +677,11 @@ The script:
 Results are written to:
 
 ```
-```
-
-```
 results/raw_metrics.csv
 results/summary_metrics.csv
 ```
 
 The terminal prints a compact summary:
-
-```
-```
 
 ```
 ========== ZDT1 ==========
@@ -811,9 +722,6 @@ Spacing:  0.001935 ± 0.000209
 Run the test suite with:
 
 ```
-```
-
-```
 PYTHONPATH=. pytest
 ```
 
@@ -826,9 +734,6 @@ The test suite provides regression coverage for the implemented SPEA2 components
 The experiments use deterministic random seeds:
 
 ```
-```
-
-```
 1 through 10
 ```
 
@@ -837,9 +742,6 @@ For every benchmark, the same experimental settings are used.
 This makes it possible to reproduce the reported results under the same software and execution environment.
 
 The experimental configuration is:
-
-```
-```
 
 ```
 Population = 100
@@ -881,9 +783,6 @@ This makes the implementation useful for understanding the internal mechanics of
 The main `spea2()` implementation accepts an objective function rather than hard-coding a single benchmark.
 
 This allows the same optimizer to be used with:
-
-```
-```
 
 ```
 ZDT1
@@ -952,9 +851,6 @@ The experiments demonstrate that the implementation performs strongly on smooth 
 The use of multiple metrics and independent runs provides a more complete evaluation than relying on a single performance indicator.
 
 The project demonstrates the complete workflow of a multi-objective evolutionary optimization experiment:
-
-```
-```
 
 ```
 Algorithm Implementation
