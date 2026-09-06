@@ -1,19 +1,29 @@
-def calculate_hypervolume(front, reference_point):
+def calculate_hypervolume(front,reference_point):
     if not front:
         return 0.0
-    if len(reference_point) != 2:
-        raise ValueError(
-            "This implementation supports exactly 2 objectives"
-        )
-    sorted_front = sorted(front, key=lambda point: point[0])
-    hypervolume = 0.0
-    previous_x = reference_point[0]
-    for point in reversed(sorted_front):
-        x = point[0]
-        y = point[1]
-        width = previous_x - x
-        height = reference_point[1] - y
-        if width > 0 and height > 0:
-            hypervolume += width * height
-        previous_x = x
-    return hypervolume
+
+    points=[
+        point
+        for point in front
+        if point[0]<reference_point[0]
+        and point[1]<reference_point[1]
+    ]
+
+    if not points:
+        return 0.0
+
+    points.sort(key=lambda x:x[0])
+
+    hv=0.0
+    previous_x=reference_point[0]
+
+    for x,y in reversed(points):
+        width=previous_x-x
+        height=reference_point[1]-y
+
+        if width>0 and height>0:
+            hv+=width*height
+
+        previous_x=x
+
+    return hv

@@ -1,50 +1,43 @@
 # SPEA2 Multi-Objective Optimization
 
-Implementation of the Strength Pareto Evolutionary Algorithm 2 (SPEA2) from scratch in Python.
+Implementation and experimental evaluation of the Strength Pareto Evolutionary Algorithm 2 (SPEA2) on standard ZDT multi-objective optimization benchmarks.
 
 ## Project Objective
 
-The objective of this project is to implement and experimentally evaluate a multi-objective evolutionary algorithm.
+The objective of this project is to implement SPEA2 from scratch in Python and evaluate its performance on standard multi-objective optimization problems.
 
-SPEA2 is implemented from scratch without relying on an optimization library for the core algorithm.
+The core SPEA2 algorithm is implemented without relying on an external optimization library.
 
-The implementation will later be compared with other multi-objective evolutionary algorithms such as NSGA-II.
+## Benchmarks
 
-## Current Progress
+The implementation is evaluated on:
 
-- Pareto dominance
-- Strength calculation
-- Raw fitness
-- Density estimation
-- Final fitness assignment
-- Environmental selection
-- Archive truncation
-- Tournament selection
-- Simulated Binary Crossover
-- Polynomial mutation
-- ZDT1 benchmark function
-- Population initialization
-- SPEA2 evolutionary loop
-- ZDT1 Pareto-front validation
+- ZDT1
+- ZDT2
+- ZDT3
+- ZDT4
+- ZDT6
 
-## Repository Structure
+All problems use two objectives and are treated as minimization problems.
+
+## Experimental Protocol
+
+The benchmark experiments use:
+
+| Parameter | Value |
+|---|---:|
+| Population size | 100 |
+| Archive size | 100 |
+| Generations | 250 |
+| Independent runs | 10 |
+| Seeds | 1–10 |
+| Crossover probability | 0.9 |
+| SBX distribution index | 20 |
+| Mutation probability | 1 / number of variables |
+| Polynomial mutation index | 20 |
+| Total evaluations/run | 25,100 |
+
+The total number of function evaluations is:
 
 ```text
-spea2-multi-objective-optimization/
-│
-├── src/
-│   ├── __init__.py
-│   └── spea2.py
-│
-├── experiments/
-│   └── zdt1_experiment.py
-│
-├── results/
-│   └── figures/
-│       └── spea2_zdt1.png
-│
-├── tests/
-│
-├── README.md
-├── requirements.txt
-└── .gitignore
+100 + 250 × 100 = 25,100

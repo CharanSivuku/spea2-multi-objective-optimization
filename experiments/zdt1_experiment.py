@@ -1,13 +1,7 @@
-import math
 import sys
 import os
-
-import matplotlib.pyplot as plt
-
-from src.metrics.igd import calculate_igd
-from src.metrics.gd import calculate_gd
-from src.metrics.hypervolume import calculate_hypervolume
-from src.metrics.spacing import calculate_spacing
+import math
+import statistics
 
 sys.path.append(
     os.path.abspath(
@@ -18,144 +12,187 @@ sys.path.append(
     )
 )
 
-from spea2 import spea2, zdt1
-
-population_size = 100
-num_variables = 30
-archive_size = 100
-generations = 250
-
-lower_bound = 0.0
-upper_bound = 1.0
-
-
-
-population, archive = spea2(
-    population_size,
-    num_variables,
-    archive_size,
-    generations,
-    lower_bound,
-    upper_bound
+from spea2 import (
+    spea2,
+    zdt1,
+    zdt2,
+    zdt3,
+    zdt4,
+    zdt6
 )
 
-objectives = [
-    zdt1(solution)
-    for solution in archive
-]
+from metrics.igd import calculate_igd
+from metrics.gd import calculate_gd
+from metrics.hypervolume import calculate_hypervolume
+from metrics.spacing import calculate_spacing
 
-reference_front = [
-    [
-        i / 1000,
-        1 - math.sqrt(i / 1000)
-    ]
-    for i in range(1001)
-]
 
-igd = calculate_igd(
-    objectives,
-    reference_front
-)
+POPULATION_SIZE = 100
+ARCHIVE_SIZE = 100
+GENERATIONS = 500
+RUNS = 10
 
-gd = calculate_gd(
-    objectives,
-    reference_front
-)
 
-hv = calculate_hypervolume(
-    objectives,
-    [1.1, 1.1]
-)
+problems = {
+    "ZDT1": (zdt1, 30),
+    "ZDT2": (zdt2, 30),
+    "ZDT3": (zdt3, 30),
+    "ZDT4": (zdt4, 30),
+    "ZDT6": (zdt6, 10)
+}
 
-spacing = calculate_spacing(
-    objectives
-)
 
-print(f"IGD: {igd}")
-print(f"GD: {gd}")
-print(f"Hypervolume: {hv}")
-print(f"Spacing: {spacing}")
+def generate_reference_front(problem_name,num_points=1000):
+    reference=[]
 
-metrics_dir = os.path.abspath(
-    os.path.join(
-        os.path.dirname(__file__),
-        "../results/metrics"
+    if problem_name=="ZDT1":
+        for i in range(num_points+1):
+            f1=i/num_points
+            f2=1-math.sqrt(f1)
+            reference.append([f1,f2])
+
+    elif problem_name=="ZDT2":
+        for i in range(num_points+1):
+            f1=i/num_points
+            f2=1-f1**2
+            reference.append([f1,f2])
+
+    elif problem_name=="ZDT3":
+        intervals=[
+            (0.0,0.0830015349),
+            (0.1822287280,0.2577623634),
+            (0.4093136748,0.4538821041),
+            (0.6183967944,0.6525117038),
+            (0.8233317983,0.8518328654)
+        ]
+
+        for start,end in intervals:
+            for i in range(num_points//len(intervals)):
+                f1=start+(end-start)*i/(num_points//len(intervals)-1)
+                f2=1-math.sqrt(f1)-f1*math.sin(10*math.pi*f1)
+                reference.append([f1,f2])
+
+    elif problem_name=="ZDT4":
+        for i in range(num_points+1):
+            f1=i/num_points
+            f2=1-math.sqrt(f1)
+            reference.append([f1,f2])
+
+    elif problem_name=="ZDT6":
+        f1_min=0.280775
+
+        for i in range(num_points+1):
+            f1=f1_min+(1-f1_min)*i/num_points
+            f2=1-f1**2
+            reference.append([f1,f2])
+
+    return reference
+
+
+def run_problem(
+    problem_name,
+    objective_function,
+    num_variables
+):
+    if problem_name == "ZDT4":
+        lower_bound = [0.0] + [-5.0] * (num_variables - 1)
+        upper_bound = [1.0] + [5.0] * (num_variables - 1)
+    else:
+        lower_bound = 0.0
+        upper_bound = 1.0
+
+    reference_front = generate_reference_front(
+        problem_name
     )
-)
 
-os.makedirs(
-    metrics_dir,
-    exist_ok=True
-)
+    igd_values = []
+    gd_values = []
+    hv_values = []
+    spacing_values = []
 
-metrics_file = os.path.join(
-    metrics_dir,
-    "zdt1_metrics.txt"
-)
+    for run in range(RUNS):
+        _, archive = spea2(
+            POPULATION_SIZE,
+            num_variables,
+            ARCHIVE_SIZE,
+            GENERATIONS,
+            lower_bound,
+            upper_bound,
+            objective_function
+        )
 
-with open(metrics_file, "w") as file:
-    file.write(f"IGD: {igd}\n")
-    file.write(f"GD: {gd}\n")
-    file.write(f"Hypervolume: {hv}\n")
-    file.write(f"Spacing: {spacing}\n")
-    
-obtained_f1 = [
-    objective[0]
-    for objective in objectives
-]
+        objectives = [
+            objective_function(solution)
+            for solution in archive
+        ]
 
-obtained_f2 = [
-    objective[1]
-    for objective in objectives
-]
+        igd_values.append(
+            calculate_igd(
+                objectives,
+                reference_front
+            )
+        )
 
-true_f1 = [
-    point[0]
-    for point in reference_front
-]
+        gd_values.append(
+            calculate_gd(
+                objectives,
+                reference_front
+            )
+        )
 
-true_f2 = [
-    point[1]
-    for point in reference_front
-]
+        hv_values.append(
+            calculate_hypervolume(
+                objectives,
+                [1.1, 1.1]
+            )
+        )
 
-plt.scatter(
-    obtained_f1,
-    obtained_f2,
-    label="SPEA2"
-)
+        spacing_values.append(
+            calculate_spacing(
+                objectives
+            )
+        )
 
-plt.plot(
-    true_f1,
-    true_f2,
-    label="True Pareto Front"
-)
+    return {
+        "IGD": (
+            statistics.mean(igd_values),
+            statistics.stdev(igd_values)
+        ),
+        "GD": (
+            statistics.mean(gd_values),
+            statistics.stdev(gd_values)
+        ),
+        "Hypervolume": (
+            statistics.mean(hv_values),
+            statistics.stdev(hv_values)
+        ),
+        "Spacing": (
+            statistics.mean(spacing_values),
+            statistics.stdev(spacing_values)
+        )
+    }
 
-plt.xlabel("f1")
-plt.ylabel("f2")
-plt.title("SPEA2 on ZDT1")
-plt.legend()
-plt.grid()
 
-results_dir = os.path.abspath(
-    os.path.join(
-        os.path.dirname(__file__),
-        "../results/figures"
+for problem_name, (
+    objective_function,
+    num_variables
+) in problems.items():
+
+    results = run_problem(
+        problem_name,
+        objective_function,
+        num_variables
     )
-)
 
-os.makedirs(
-    results_dir,
-    exist_ok=True
-)
+    print()
+    print(
+        "==========",
+        problem_name,
+        "=========="
+    )
 
-plt.savefig(
-    os.path.join(
-        results_dir,
-        "spea2_zdt1.png"
-    ),
-    dpi=300,
-    bbox_inches="tight"
-)
-
-plt.show()
+    for metric, (mean, std) in results.items():
+        print(
+            f"{metric}: "
+            f"{mean:.6f} ± {std:.6f}"
+        )
