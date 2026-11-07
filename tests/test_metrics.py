@@ -62,3 +62,21 @@ def test_spacing():
     ]
     result = calculate_spacing(front)
     assert math.isclose(result, 0.0)
+def test_hypervolume_three_objectives_single_point():
+    front = [[0.5, 0.5, 0.5]]
+    assert math.isclose(
+        calculate_hypervolume(front, [1.0, 1.0, 1.0]),
+        0.125,
+    )
+
+
+def test_hypervolume_three_objectives_overlapping_boxes():
+    front = [
+        [0.5, 0.5, 0.5],
+        [0.25, 0.75, 0.75],
+    ]
+    # 0.125 + 0.046875 - 0.03125 = 0.140625
+    assert math.isclose(
+        calculate_hypervolume(front, [1.0, 1.0, 1.0]),
+        0.140625,
+    )

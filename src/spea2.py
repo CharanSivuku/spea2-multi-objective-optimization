@@ -1,6 +1,8 @@
 import math
 import random
 
+import numpy as np
+
 
 def dominates(a, b):
     no_worse = all(x <= y for x, y in zip(a, b))
@@ -9,28 +11,94 @@ def dominates(a, b):
     return no_worse and strictly_better
 
 
-def calculate_strength(solutions):
-    n = len(solutions)
-    strength = [0] * n
+def constraint_dominates(a, violation_a, b, violation_b):
+    """Feasibility-first (Deb) constraint dominance for minimisation.
 
-    for i in range(n):
-        for j in range(n):
-            if i != j and dominates(solutions[i], solutions[j]):
-                strength[i] += 1
+    A violation of 0 means feasible; positive values are the total amount
+    by which constraints are violated.
 
-    return strength
+    1. A feasible solution dominates any infeasible solution.
+    2. Between two infeasible solutions, the smaller violation dominates.
+    3. Between two feasible solutions, ordinary Pareto dominance applies.
+    """
+    feasible_a = violation_a <= 0.0
+    feasible_b = violation_b <= 0.0
+
+    if feasible_a and feasible_b:
+        return dominates(a, b)
+
+    if feasible_a:
+        return True
+
+    if feasible_b:
+        return False
+
+    return violation_a < violation_b
 
 
-def calculate_raw_fitness(solutions, strength):
-    n = len(solutions)
-    raw_fitness = [0] * n
+def _dominance_test(solutions, violations):
+    """Return f(i, j) -> True if solution i dominates solution j."""
+    if violations is None:
+        return lambda i, j: dominates(solutions[i], solutions[j])
 
-    for i in range(n):
-        for j in range(n):
-            if i != j and dominates(solutions[j], solutions[i]):
-                raw_fitness[i] += strength[j]
+    if len(violations) != len(solutions):
+        raise ValueError(
+            "violations must have one entry per solution"
+        )
 
-    return raw_fitness
+    return lambda i, j: constraint_dominates(
+        solutions[i], violations[i],
+        solutions[j], violations[j]
+    )
+
+
+def _dominance_matrix(solutions, violations=None):
+    """Boolean matrix ``dom[i, j]`` = solution i dominates solution j.
+
+    Vectorised equivalent of the pairwise ``dominates`` /
+    ``constraint_dominates`` loops (see the ``*_reference`` functions).
+    """
+    a = np.asarray(solutions, dtype=float)
+
+    if violations is not None and len(violations) != len(a):
+        raise ValueError(
+            "violations must have one entry per solution"
+        )
+
+    no_worse = (a[:, None, :] <= a[None, :, :]).all(axis=2)
+    strictly_better = (a[:, None, :] < a[None, :, :]).any(axis=2)
+    pareto = no_worse & strictly_better
+
+    if violations is None:
+        dom = pareto
+    else:
+        v = np.asarray(violations, dtype=float)
+        feasible = v <= 0.0
+        both_feasible = feasible[:, None] & feasible[None, :]
+        both_infeasible = ~feasible[:, None] & ~feasible[None, :]
+
+        dom = (
+            (both_feasible & pareto)
+            | (feasible[:, None] & ~feasible[None, :])
+            | (both_infeasible & (v[:, None] < v[None, :]))
+        )
+
+    np.fill_diagonal(dom, False)
+
+    return dom
+
+
+def calculate_strength(solutions, violations=None):
+    dom = _dominance_matrix(solutions, violations)
+
+    return dom.sum(axis=1).tolist()
+
+
+def calculate_raw_fitness(solutions, strength, violations=None):
+    dom = _dominance_matrix(solutions, violations)
+    s = np.asarray(strength, dtype=np.int64)
+
+    return (dom * s[:, None]).sum(axis=0).tolist()
 
 
 def euclidean_distance(a, b):
@@ -40,16 +108,14 @@ def euclidean_distance(a, b):
 
 
 def calculate_distance_matrix(solutions):
-    n = len(solutions)
-    distances = [[0.0] * n for _ in range(n)]
-
-    for i in range(n):
-        for j in range(n):
-            if i != j:
-                distances[i][j] = euclidean_distance(
-                    solutions[i],
-                    solutions[j]
-                )
+    """Pairwise Euclidean distances as an (n, n) array (zero diagonal)."""
+    a = np.asarray(solutions, dtype=float)
+    diff = a[:, None, :] - a[None, :, :]
+    # np.power (libm pow), not diff ** 2 (which NumPy turns into a
+    # multiplication): Python's ``x ** 2`` differs from ``x * x`` in the last
+    # bit for ~0.1 % of floats, and this must match ``euclidean_distance``.
+    distances = np.sqrt(np.power(diff, 2.0).sum(axis=2))
+    np.fill_diagonal(distances, 0.0)
 
     return distances
 
@@ -67,6 +133,63 @@ def kth_nearest_distance(distances, i, k):
 
 
 def calculate_density(distances, k):
+    d = np.array(distances, dtype=float)
+    n = len(d)
+
+    if k < 1 or k > n - 1:
+        raise IndexError("k must be between 1 and the number of neighbours")
+
+    np.fill_diagonal(d, np.inf)
+    sigma_k = np.partition(d, k - 1, axis=1)[:, k - 1]
+
+    return (1.0 / (sigma_k + 2.0)).tolist()
+
+
+# ---- original pure-Python versions, kept as the specification ----
+
+
+def calculate_strength_reference(solutions, violations=None):
+    n = len(solutions)
+    strength = [0] * n
+    dominated_by = _dominance_test(solutions, violations)
+
+    for i in range(n):
+        for j in range(n):
+            if i != j and dominated_by(i, j):
+                strength[i] += 1
+
+    return strength
+
+
+def calculate_raw_fitness_reference(solutions, strength, violations=None):
+    n = len(solutions)
+    raw_fitness = [0] * n
+    dominated_by = _dominance_test(solutions, violations)
+
+    for i in range(n):
+        for j in range(n):
+            if i != j and dominated_by(j, i):
+                raw_fitness[i] += strength[j]
+
+    return raw_fitness
+
+
+def calculate_distance_matrix_reference(solutions):
+    n = len(solutions)
+    distances = [[0.0] * n for _ in range(n)]
+
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                distances[i][j] = euclidean_distance(
+                    solutions[i],
+                    solutions[j]
+                )
+
+    return distances
+
+
+def calculate_density_reference(distances, k):
     n = len(distances)
     density = [0.0] * n
 
@@ -127,7 +250,13 @@ def find_truncation_candidate(distances, active):
     return best
 
 
-def truncate_archive(objectives, archive_indices, archive_size):
+def truncate_archive_reference(objectives, archive_indices, archive_size):
+    """Original (slow) truncation, kept as the specification of the result.
+
+    Repeatedly removes the solution whose sorted list of distances to the
+    other remaining solutions is lexicographically smallest (ties: the
+    earliest in archive order).
+    """
     active = archive_indices.copy()
     distances = calculate_distance_matrix(objectives)
 
@@ -140,6 +269,67 @@ def truncate_archive(objectives, archive_indices, archive_size):
         active.remove(candidate)
 
     return active
+
+
+def truncate_archive(objectives, archive_indices, archive_size):
+    """Fast truncation producing exactly the same removals as
+    ``truncate_archive_reference``.
+
+    Only the nearest-neighbour distance is needed to find the candidates for
+    removal (the lexicographic minimum must have the smallest first element);
+    the full sorted rows are compared only among candidates tied on it, which
+    happens for at least a mutual nearest-neighbour pair on every step. The
+    nearest-neighbour table is updated only for rows that pointed at the
+    removed solution.
+    """
+    active = archive_indices.copy()
+
+    if len(active) <= archive_size:
+        return active
+
+    points = np.asarray([objectives[i] for i in active], dtype=float)
+    n = len(active)
+
+    diff = points[:, None, :] - points[None, :, :]
+    distance = np.sqrt(np.power(diff, 2.0).sum(axis=2))  # same bits as Python's ** 2
+    np.fill_diagonal(distance, np.inf)
+
+    rows = np.arange(n)
+    nearest_index = distance.argmin(axis=1)
+    nearest = distance[rows, nearest_index]
+
+    removed = np.zeros(n, dtype=bool)
+    remaining = n
+
+    while remaining > archive_size:
+        masked = np.where(removed, np.inf, nearest)
+        smallest = masked.min()
+        candidates = np.flatnonzero(masked == smallest)
+
+        if len(candidates) == 1:
+            victim = int(candidates[0])
+        else:
+            victim = None
+            victim_list = None
+
+            for c in candidates:
+                # removed solutions and the solution itself are +inf and sort last
+                current = tuple(np.sort(distance[c])[:remaining - 1].tolist())
+
+                if victim is None or current < victim_list:
+                    victim = int(c)
+                    victim_list = current
+
+        removed[victim] = True
+        distance[victim, :] = np.inf
+        distance[:, victim] = np.inf
+        remaining -= 1
+
+        for r in np.flatnonzero((nearest_index == victim) & ~removed):
+            nearest_index[r] = distance[r].argmin()
+            nearest[r] = distance[r, nearest_index[r]]
+
+    return [active[p] for p in range(n) if not removed[p]]
 
 
 def environmental_selection(objectives, fitness, archive_size):
@@ -580,8 +770,15 @@ def spea2(
     generations,
     lower_bound,
     upper_bound,
-    objective_function=zdt1
+    objective_function=zdt1,
+    constraint_function=None
 ):
+    """Run SPEA2.
+
+    constraint_function, if given, maps a decision vector to its total
+    constraint violation (0 = feasible, > 0 = infeasible). When it is
+    None the algorithm behaves exactly as the original unconstrained SPEA2.
+    """
     population = initialize_population(
         population_size,
         num_variables,
@@ -591,22 +788,40 @@ def spea2(
 
     archive = []
 
+    # Objective values (and violations) of the archive are kept between
+    # generations instead of being recomputed. The functions are
+    # deterministic, so results are identical to re-evaluating them, but each
+    # solution is now evaluated exactly once, which makes evaluation-budget
+    # accounting exact and halves the evaluation cost.
+    archive_objectives = []
+    archive_violations = []
+
     for generation in range(generations):
 
         combined_population = population + archive
 
         combined_objectives = [
             objective_function(solution)
-            for solution in combined_population
-        ]
+            for solution in population
+        ] + archive_objectives
+
+        if constraint_function is None:
+            violations = None
+        else:
+            violations = [
+                constraint_function(solution)
+                for solution in population
+            ] + archive_violations
 
         strength = calculate_strength(
-            combined_objectives
+            combined_objectives,
+            violations
         )
 
         raw_fitness = calculate_raw_fitness(
             combined_objectives,
-            strength
+            strength,
+            violations
         )
 
         distances = calculate_distance_matrix(
@@ -640,6 +855,17 @@ def spea2(
             combined_population[i]
             for i in archive_indices
         ]
+
+        archive_objectives = [
+            combined_objectives[i]
+            for i in archive_indices
+        ]
+
+        if violations is not None:
+            archive_violations = [
+                violations[i]
+                for i in archive_indices
+            ]
 
         archive_fitness = [
             fitness[i]
