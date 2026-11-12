@@ -1,0 +1,7 @@
+{
+  "python": "3.9.6 (default, Oct 19 2026, 19:18:13) \n[Clang 21.0.0 (clang-2100.4.1.1)]",
+  "platform": "macOS-27.2-arm64-arm-64bit",
+  "processor": "arm",
+  "machine": "arm64",
+  "t2_note": "mean of 5 complete SPEA2 runs (population 100, archive 100) of 200,000 evaluations of F1"
+}

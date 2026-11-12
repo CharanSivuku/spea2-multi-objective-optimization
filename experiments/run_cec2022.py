@@ -12,8 +12,9 @@ Follows the technical report's protocol:
 
 SPEA2 is a multi-objective algorithm: here it runs with a single objective, where
 Pareto dominance reduces to ranking by function value. It is *not* tuned for
-these problems and is reported as-is; population/archive sizes are the
-project defaults (100/100) unless overridden.
+these problems and is reported as-is; population/archive sizes are 100/100
+unless overridden, with the project's original per-variable SBX scheme (see
+DEFAULT_SBX_SCHEME).
 
 Outputs (in --output-dir, never overwriting existing files unless --overwrite;
 results are written after every (function, dimension) group, and an
@@ -45,6 +46,12 @@ from src.spea2 import spea2  # noqa: E402
 
 TARGET_ERROR = 1e-8
 MAX_FES = {10: 200_000, 20: 1_000_000}
+
+# The CEC 2022 experiments keep their original SPEA2 settings (population 100,
+# archive 100, SBX applied to every variable with probability 0.9, mutation
+# 1/n with index 20). They are *not* aligned with the NSGA-II comparison
+# protocol used for the multi-objective suites, which uses the Deb SBX scheme.
+DEFAULT_SBX_SCHEME = "per_variable"
 
 
 class _Finished(Exception):
@@ -103,7 +110,8 @@ class FESTracker:
 
 def run_once(job):
     """One independent run. Returns a dict (picklable)."""
-    func_num, dim, run_id, runs, population, archive, max_fes = job
+    func_num, dim, run_id, runs, population, archive, max_fes = job[:7]
+    sbx_scheme = job[7] if len(job) > 7 else DEFAULT_SBX_SCHEME
 
     function = CEC2022Function(func_num, dim)
     seed = run_seed(dim, func_num, run_id, runs)
@@ -119,6 +127,7 @@ def run_once(job):
             max_fes // population + 2,
             function.lower, function.upper,
             tracker,
+            sbx_scheme=sbx_scheme,
         )
     except _Finished:
         pass
@@ -155,6 +164,12 @@ def main():
     parser.add_argument(
         "--max-fes-scale", type=float, default=1.0,
         help="Scale MaxFES (1.0 = official budget; <1 only for quick tests)."
+    )
+    parser.add_argument(
+        "--sbx-scheme", choices=["per_variable", "deb"],
+        default=DEFAULT_SBX_SCHEME,
+        help="SBX probability scheme; the default reproduces the original "
+             "CEC 2022 settings of this project."
     )
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--output-dir", default=None)
@@ -239,7 +254,7 @@ def main():
 
                 jobs = [
                     (func, dim, run_id, args.runs, args.population,
-                     args.archive, max_fes)
+                     args.archive, max_fes, args.sbx_scheme)
                     for run_id in range(1, args.runs + 1)
                 ]
 

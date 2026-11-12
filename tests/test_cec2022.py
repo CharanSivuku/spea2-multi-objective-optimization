@@ -216,3 +216,30 @@ def test_run_once_respects_budget_and_is_reproducible():
     assert a["final_error"] == b["final_error"]
     assert a["seed"] == run_seed(10, 5, 1)
     assert len(a["column"]) == 17
+
+
+# ---------------------------------------------------------------------------
+# the CEC 2022 experiments keep the original per-variable SBX settings
+# ---------------------------------------------------------------------------
+
+def test_default_scheme_is_the_original_per_variable_one():
+    from experiments.run_cec2022 import DEFAULT_SBX_SCHEME
+
+    assert DEFAULT_SBX_SCHEME == "per_variable"
+
+    default = run_once((1, 10, 1, 30, 20, 20, 400))
+    explicit = run_once((1, 10, 1, 30, 20, 20, 400, "per_variable"))
+    other = run_once((1, 10, 1, 30, 20, 20, 400, "deb"))
+
+    assert default["final_error"] == explicit["final_error"]
+    assert default["final_error"] != other["final_error"]
+
+
+def test_pinned_value_of_an_original_run():
+    """Value of F1 / D = 10 / run 1 with a 2000-evaluation budget under the original
+    settings; the full-budget runs of the final results were verified to reproduce
+    bit-for-bit with this code."""
+    result = run_once((1, 10, 1, 30, 100, 100, 2000))
+
+    assert result["seed"] == 128
+    assert result["final_error"] == pytest.approx(15699.61056640992, rel=1e-12)

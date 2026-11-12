@@ -396,16 +396,42 @@ def select_parents(fitness, num_parents):
     return parents
 
 
+SBX_SCHEMES = ("deb", "per_variable")
+
+
 def sbx_crossover(
     parent1,
     parent2,
     lower_bound,
     upper_bound,
     eta_c=20,
-    crossover_probability=0.9
+    crossover_probability=0.9,
+    scheme="deb",
+    variable_probability=0.5
 ):
+    """Simulated binary crossover (bounded), two children.
+
+    scheme="deb" (default) is the standard NSGA-II / Deb formulation: the pair
+    is recombined with probability ``crossover_probability``; if it is, each
+    variable is crossed with probability ``variable_probability`` (0.5).
+
+    scheme="per_variable" is the legacy behaviour of this project's earlier
+    experiments: every variable is crossed independently with probability
+    ``crossover_probability`` (no pair-level draw).
+    """
+    if scheme not in SBX_SCHEMES:
+        raise ValueError(f"scheme must be one of {SBX_SCHEMES}")
+
     child1 = []
     child2 = []
+
+    if scheme == "deb":
+        if random.random() > crossover_probability:
+            return list(parent1), list(parent2)
+
+        per_variable_probability = variable_probability
+    else:
+        per_variable_probability = crossover_probability
 
     if isinstance(lower_bound, (int, float)):
         lower_bounds = [lower_bound] * len(parent1)
@@ -422,7 +448,7 @@ def sbx_crossover(
         y1 = lower_bounds[i]
         y2 = upper_bounds[i]
 
-        if random.random() > crossover_probability:
+        if random.random() > per_variable_probability:
             child1.append(x1)
             child2.append(x2)
             continue
@@ -711,7 +737,9 @@ def create_offspring(
     archive_fitness,
     population_size,
     lower_bound,
-    upper_bound
+    upper_bound,
+    sbx_scheme="deb",
+    mutation_eta=20
 ):
     offspring = []
 
@@ -738,21 +766,24 @@ def create_offspring(
             parent1,
             parent2,
             lower_bound,
-            upper_bound
+            upper_bound,
+            scheme=sbx_scheme
         )
 
         child1 = polynomial_mutation(
             child1,
             lower_bound,
             upper_bound,
-            mutation_probability
+            mutation_probability,
+            eta_m=mutation_eta
         )
 
         child2 = polynomial_mutation(
             child2,
             lower_bound,
             upper_bound,
-            mutation_probability
+            mutation_probability,
+            eta_m=mutation_eta
         )
 
         offspring.append(child1)
@@ -771,9 +802,16 @@ def spea2(
     lower_bound,
     upper_bound,
     objective_function=zdt1,
-    constraint_function=None
+    constraint_function=None,
+    sbx_scheme="deb",
+    mutation_eta=20
 ):
     """Run SPEA2.
+
+    sbx_scheme selects how the crossover probability is applied: "deb"
+    (default, standard NSGA-II/Deb: per parent pair, then 0.5 per variable) or
+    "per_variable" (legacy behaviour of this project's earlier experiments).
+    mutation_eta is the polynomial-mutation distribution index (default 20).
 
     constraint_function, if given, maps a decision vector to its total
     constraint violation (0 = feasible, > 0 = infeasible). When it is
@@ -877,7 +915,9 @@ def spea2(
             archive_fitness,
             population_size,
             lower_bound,
-            upper_bound
+            upper_bound,
+            sbx_scheme,
+            mutation_eta
         )
 
     return population, archive

@@ -44,7 +44,8 @@ def time_t0() -> float:
         x = x / 2
         x = x * x
         x = math.sqrt(x)
-        x = math.log(x)
+        # MATLAB semantics: log(0) = -Inf (x decays to 0 in this loop), exp(-Inf) = 0
+        x = math.log(x) if x > 0 else float("-inf")
         x = math.exp(x)
         x = x / (x + 2)
 

@@ -1,507 +1,305 @@
-# SPEA2 Multi-Objective Optimization
+<div align="center">
 
-A from-scratch Python implementation of **SPEA2** (Strength Pareto Evolutionary
-Algorithm 2), evaluated on a suite of **30 standard multi-objective benchmark
-problems** (5 ZDT, 7 DTLZ, 18 classical) with four performance metrics
-(Hypervolume, IGD, GD, Spacing), reproducible seeded runs, analytical or
-documented numerical reference Pareto fronts, and optional constraint handling.
-The repository also contains ports of two CEC competition suites: the **CEC 2022
-single-objective** functions (12 problems) and the **CEC 2020 multimodal
-multi-objective** problems (24 problems), each with the organisers' data,
-protocol and indicators.
+<img src="docs/images/iitism_logo.png" width="120" alt="IIT (ISM) Dhanbad"/>
 
-```
-Algorithm  →  30 benchmarks  →  seeded independent runs  →  HV / IGD / GD / Spacing
-          →  mean ± std per benchmark  →  figures, CSVs, report
-```
+# Multi-Objective Optimization with SPEA2
 
-> **Read this first:** the result sets in this repository were run with
-> *different generation budgets* (250, 500 and 2000). Only compare numbers that
-> share the same `Gens` value. See [Results](#results) and
-> [Known limitations](#known-limitations).
+### Implementation and Benchmarking on Standard, CEC 2020 MMO and CEC 2022 Suites
+
+**Indian Institute of Technology (Indian School of Mines) Dhanbad**<br/>
+Department of Computer Science and Engineering
+
+**Charan Sivuku** &nbsp;·&nbsp; Under the guidance of **Prof. Haider Banka** &nbsp;·&nbsp; 13 November 2026
+
+![Python](https://img.shields.io/badge/python-3.9+-blue) ![Tests](https://img.shields.io/badge/tests-312%20passed-brightgreen) ![Benchmarks](https://img.shields.io/badge/benchmarks-30%20%2B%2024%20%2B%2012-orange)
+
+</div>
 
 ---
 
-## Contents
+## 📑 Contents
 
-1. [Quick start](#quick-start)
-2. [Project structure](#project-structure)
-3. [Algorithm](#algorithm)
-4. [Benchmark suite (30 problems)](#benchmark-suite-30-problems)
-5. [Experimental protocol](#experimental-protocol)
-6. [Metrics](#metrics)
-7. [Results](#results)
-8. [CEC competition suites](#cec-competition-suites)
-9. [Corrections made during verification](#corrections-made-during-verification)
-10. [Known limitations](#known-limitations)
-11. [Reproducibility and testing](#reproducibility-and-testing)
-
----
-
-## Quick start
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-Run the tests (300 tests):
-
-```bash
-python -m pytest
-```
-
-Run benchmarks (any of the 30 registered names; results go to
-`results/data/new_run/` unless `--output-dir` is given, and existing files are
-never overwritten without `--overwrite`):
-
-```bash
-python experiments/run_benchmarks.py --benchmarks ZDT1 Tanaka DTLZ2 \
-  --population 100 --archive 100 --generations 250 --runs 10 \
-  --seed-start 1 --output-dir results/data/my_run
-```
-
-Rebuild the combined table `results/all_benchmarks_summary.csv` from the
-organised result sets:
-
-```bash
-python experiments/merge_results.py
-```
-
-Runner options: `--benchmarks`, `--population`, `--archive`, `--generations`,
-`--runs`, `--seed-start`, `--dtlz-vars` (default 12), `--objectives` (default 3),
-`--output-dir`, `--overwrite`.
-
-The two CEC suites have their own runners (details in
-[CEC competition suites](#cec-competition-suites)):
-
-```bash
-python experiments/run_cec2020_mmo.py --workers 8 --output-dir results/data/my_mmo_run
-python experiments/run_cec2022.py --functions 1 2 3 --dims 10 --workers 8 --output-dir results/data/my_cec2022_run
-```
+1. [Problem statement](#1-problem-statement)
+2. [Approach: the SPEA2 algorithm](#2-approach-the-spea2-algorithm)
+3. [Implementation](#3-implementation)
+4. [Experimental protocol](#4-experimental-protocol)
+5. [Evaluation metrics](#5-evaluation-metrics)
+6. [Results](#6-results)
+7. [How to run](#7-how-to-run)
+8. [Verification and testing](#8-verification-and-testing)
+9. [Conclusion, limitations and future work](#9-conclusion-limitations-and-future-work)
+10. [References](#10-references)
 
 ---
 
-## Project structure
+## 1. Problem statement
+
+> **Implement the Strength Pareto Evolutionary Algorithm 2 (SPEA2) and evaluate it, under a protocol shared with an NSGA-II baseline, on 30 standard multi-objective benchmarks, the 24 CEC 2020 multimodal multi-objective problems and the 12 CEC 2022 single-objective functions, reporting hypervolume, IGD, GD and spacing (and the MMO indicators 1/PSP, 1/HV, IGDX, IGDF) so that the results can be compared with other multi-objective evolutionary algorithms.**
+
+Formally, the algorithm solves min F(x) = (f₁(x), …, f_m(x)) subject to g_j(x) ≤ 0 and lower ≤ x ≤ upper, and returns a set of non-dominated points approximating the Pareto front.
+
+| Benchmark group | Problems |
+|---|---|
+| **Standard suite (30)** | ZDT1–4, 6 · DTLZ1–7 · Binh1, Binh3, Deb, Deb2, Fonseca, Fonseca2, Kursawe, Laumanns, Murata, Quagliarella, Rendon, Rendon2, Schaffer, Schaffer2, Srinivas, Tanaka, Viennet, Viennet2 |
+| **CEC 2020 MMO (24)** | MMF1 … MMF16_l3 (several equivalent Pareto sets) |
+| **CEC 2022 (12)** | F1–F12, dimensions 10 and 20 (single-objective) |
+
+**Challenges:** conflicting objectives, constraint handling (eight classical problems are constrained), multimodal landscapes, corrected reference fronts, and a pure-Python budget of up to 600,200 evaluations per run.
+
+---
+
+## 2. Approach: the SPEA2 algorithm
+
+SPEA2 keeps a population *P* (size N) and an archive *A* (size N′). In every iteration:
+
+| Step | What happens |
+|---|---|
+| **1 Strength** | S(i) = number of solutions in P ∪ A that *i* dominates |
+| **2 Raw fitness** | R(i) = sum of the strengths of all dominators of *i* (0 for non-dominated) |
+| **3 Density** | D(i) = 1 / (σᵢᵏ + 2), σᵢᵏ = distance to the k-th neighbour, k = ⌊√(N+N′)⌋ |
+| **4 Fitness** | F(i) = R(i) + D(i); F < 1 ⇒ non-dominated |
+| **5 Environmental selection** | keep F < 1; if too many, repeatedly remove the solution with the smallest nearest-neighbour distance (lexicographic ties); if too few, fill with the best dominated ones |
+| **6 Variation** | binary tournament on the archive, SBX crossover (η = 20), polynomial mutation |
+
+Additions in this implementation: an **exact evaluation budget** (archive objectives are cached, so evaluations = population × iterations), **feasibility-first dominance** for constrained problems, and **vectorised internals proven bit-identical** to the plain reference version by regression tests.
+
+---
+
+## 3. Implementation
 
 ```
 spea2-multi-objective/
 ├── src/
-│   ├── spea2.py                 SPEA2 (+ opt-in constraint dominance) and the ZDT functions
-│   ├── benchmarks/
-│   │   ├── dtlz.py              DTLZ1-7 and their reference fronts
-│   │   ├── classical.py         Binh1, Deb, Deb2, Fonseca, Fonseca2, Kursawe
-│   │   ├── classical_extra.py   Binh3, Laumanns, Murata, Quagliarella, Rendon, Rendon2,
-│   │   │                        Schaffer, Schaffer2, Srinivas, Tanaka, Viennet, Viennet2
-│   │   ├── cec2022.py           CEC 2022 single-objective suite (F1-F12), port of the C reference
-│   │   └── cec2020_mmo.py       CEC 2020 multimodal multi-objective suite (24 problems)
-│   └── metrics/                 hypervolume.py, igd.py, gd.py, spacing.py,
-│                                mmo.py (IGDX, cover rate, PSP, 1/HV for the MMO suite)
-├── data/                        official CEC 2022 / CEC 2020 MMO input data (see data/README.md)
-├── experiments/
-│   ├── benchmark_registry.py    central registry of all 30 benchmarks
-│   ├── run_benchmarks.py        experiment runner (CSV + figures)
-│   ├── merge_results.py         builds results/all_benchmarks_summary.csv
-│   ├── run_cec2022.py           CEC 2022 runner (30 runs, checkpoints, official seeds)
-│   ├── run_cec2020_mmo.py       CEC 2020 MMO runner (21 runs, 1/PSP, 1/HV, IGDX, IGDF)
-│   ├── plot_front.py            2-D / 3-D Pareto-front plots
-│   ├── plot_mmo.py              Pareto set + front plots for the MMO problems
-│   ├── zdt_benchmarks.py        legacy ZDT-only script (250 generations)
-│   ├── zdt1_experiment.py       legacy single-problem script
-│   └── test_classical.py        older registry test (not collected by pytest)
-├── tests/                       metrics, DTLZ, classical_extra, constraints, spea2_regression, cec2022, cec2020_mmo
-├── results/                     all outputs, organised (see results/README.md)
-├── validate_dtlz.py             quick DTLZ sanity prints
-├── pytest.ini
-└── requirements.txt
-```
-
-### Results folder
-
-```
-results/
-├── README.md                    guide to the folder
-├── all_benchmarks_summary.csv   one row per benchmark (30)
-├── MANIFEST.tsv                 old → new location of every file
-├── figures/                     all 30 figures (one PNG per benchmark), _overview_all_30.png, archive/
-├── data/                        raw + summary CSVs, one numbered folder per run set
-├── reports/                     written reports
-└── logs/                        console output of runs
+│   ├── spea2.py              SPEA2 (fitness, truncation, SBX, mutation, constraint dominance)
+│   ├── benchmarks/           dtlz.py · classical.py · classical_extra.py · cec2020_mmo.py · cec2022.py
+│   └── metrics/              hypervolume.py · igd.py · gd.py · spacing.py · mmo.py
+├── experiments/              run_benchmarks.py · run_cec2020_mmo.py · run_cec2022.py · cec2022_complexity.py
+│                             benchmark_registry.py · merge_results.py · export_comparison.py
+│                             save_fronts.py · plot_front.py · plot_mmo.py
+├── tests/                    312 automated tests
+├── data/                     official CEC 2022 files, CEC 2020 reference sets and fronts
+├── results/                  final CSVs, reference/obtained fronts, short written summaries
+└── docs/images/              figures used in this README
 ```
 
 ---
 
-## Algorithm
+## 4. Experimental protocol
 
-SPEA2 is implemented directly in `src/spea2.py` with no optimisation library.
-Each generation works on the union of the population and the archive:
+The configuration is shared with the NSGA-II baseline so that results can be compared directly. Every offspring is evaluated once.
 
-| Step | Definition |
-|---|---|
-| Strength | `S(i) = number of solutions that i dominates` |
-| Raw fitness | `R(i) = Σ S(j)` over all `j` that dominate `i` (0 for non-dominated) |
-| Density | `D(i) = 1 / (σ_k(i) + 2)`, with `k = max(1, ⌊√N⌋)` and `N` the union size |
-| Fitness | `F(i) = R(i) + D(i)`; lower is better |
-| Environmental selection | keep solutions with `F < 1`; truncate by lexicographic nearest-neighbour distances if there are too many, otherwise fill with the best remaining by fitness |
-| Parent selection | binary tournament on fitness |
-| Crossover | SBX, probability 0.9, distribution index 20, clipped to bounds |
-| Mutation | polynomial, probability `1/n`, index 20, clipped to bounds |
-
-The archive is padded with the best dominated solutions when fewer than the
-archive size are non-dominated, so a final archive can contain dominated points.
-
-### Performance optimisations (results unchanged)
-
-The pairwise parts of SPEA2 (dominance, strength, raw fitness, distance matrix,
-density, archive truncation) are vectorised with NumPy, and the archive's
-objective values are cached instead of being recomputed every generation. The
-original pure-Python versions are kept as `*_reference` functions in
-`src/spea2.py`, and `tests/test_spea2_regression.py` checks that the fast versions
-return **exactly** the same values and removals (including ties, duplicates and
-constraints) and that complete SPEA2 runs give identical output to the
-pre-optimisation code. Two details matter for exactness: distances use
-`np.power(d, 2.0)` because Python's `x ** 2` differs from `x * x` in the last bit
-for about 0.1 % of floats, and each solution is now evaluated exactly once, which
-makes evaluation budgets exact. The speed-up is large (the 3-objective MMO
-problem with population 800 went from hours per run to under 20 s), so
-experiments run with this code finish faster but are numerically identical to the
-earlier ones.
-
-### Constraint handling (opt-in)
-
-`spea2(..., constraint_function=None)` accepts a function returning the *total
-constraint violation* (0 = feasible, > 0 = infeasible). When given, dominance is
-feasibility-first (Deb's constraint dominance):
-
-1. a feasible solution dominates any infeasible one;
-2. between two infeasible solutions the smaller violation dominates;
-3. between two feasible solutions ordinary Pareto dominance applies.
-
-With `constraint_function=None` the algorithm is bit-identical to the original
-unconstrained SPEA2 (covered by a test). The runner scores only feasible archive
-members. Srinivas and Tanaka are the constrained benchmarks.
+| Setting | Standard suite | DTLZ1–7 | CEC 2020 MMO | CEC 2022 |
+|---|---|---|---|---|
+| Population = archive | 100 | 200 | 100 | 100 |
+| Iterations | 1001 | 3001 | 201 | until MaxFES |
+| Evaluations | 100,100 | 600,200 | 20,100 | 200k (D10) / 1M (D20) |
+| Runs (seeds) | 5 (1–5) | 5 (1–5) | 3 (1–3) | 30 (official seeds) |
+| SBX / mutation η | 20 / 20 | 20 / 10 | 20 / 20 | per-variable SBX |
+| Scored set | non-dominated feasible archive | same | same | best error |
 
 ---
 
-## Benchmark suite (30 problems)
-
-All objectives are minimised. Every benchmark is registered in
-`experiments/benchmark_registry.py` with its objective function, dimensions,
-bounds, reference front and (if any) constraint function.
-
-| # | Benchmark | Vars | Obj | Bounds | Constrained | Reference front |
-|---|---|---:|---:|---|:---:|---|
-| 1 | ZDT1 | 30 | 2 | [0, 1] | – | analytical |
-| 2 | ZDT2 | 30 | 2 | [0, 1] | – | analytical |
-| 3 | ZDT3 | 30 | 2 | [0, 1] | – | analytical (5 intervals) |
-| 4 | ZDT4 | 10 | 2 | x1 ∈ [0,1], rest [−5,5] | – | analytical |
-| 5 | ZDT6 | 10 | 2 | [0, 1] | – | analytical |
-| 6–12 | DTLZ1 … DTLZ7 | 12 | 3 | [0, 1] | – | analytical geometry (DTLZ7: sampled on g=1, non-dominated) |
-| 13 | Binh1 | 2 | 2 | [−5, 10] | – | analytical |
-| 14 | Binh3 | 2 | 3 | [1e-6, 1e6] | – | single ideal point |
-| 15 | Deb | 2 | 2 | [0, 1] | – | analytical |
-| 16 | Deb2 | 2 | 2 | [0, 1] | – | non-dominated part of the x2 = 0 curve |
-| 17 | Fonseca | 2 | 2 | [−4, 4] | – | parametric |
-| 18 | Fonseca2 | 2 | 2 | [−4, 4] | – | parametric |
-| 19 | Kursawe | 3 | 2 | [−5, 5] | – | sampled (41 pts, coarse) |
-| 20 | Laumanns | 2 | 2 | [−50, 50] | – | analytical |
-| 21 | Murata | 2 | 2 | x1 ∈ [1,4], x2 ∈ [1,2] | – | analytical |
-| 22 | Quagliarella | 16 | 2 | [−5.12, 5.12] | – | numerical: exact DP Minkowski sum |
-| 23 | Rendon | 2 | 2 | [−3, 3] | – | analytical |
-| 24 | Rendon2 | 2 | 2 | [−3, 3] | – | analytical |
-| 25 | Schaffer | 1 | 2 | [−10, 10] | – | analytical |
-| 26 | Schaffer2 | 1 | 2 | [−5, 10] | – | analytical (2 segments) |
-| 27 | Srinivas | 2 | 2 | [−20, 20] | **2** | numerical: Pareto-set candidates, ND-filtered |
-| 28 | Tanaka | 2 | 2 | [0, π] | **2** | numerical: constraint boundaries, ND-filtered |
-| 29 | Viennet | 2 | 3 | [−2, 2] | – | analytical (triangle Pareto set) |
-| 30 | Viennet2 | 2 | 3 | [−4, 4] | – | numerical: weighted-sum minimisers (convex) |
-
-The 12 benchmarks in `classical_extra.py` follow the MOEA Framework
-`problem.misc` formulations (Van Veldhuizen's suite) and were checked against
-the value ranges in `Benchmark_Comparison.pdf`. No reference front was produced
-by random sampling of the decision space except Kursawe's older, coarse one.
-Details and caveats: `results/reports/classical_benchmarks_report.md`.
-
----
-
-## Experimental protocol
-
-| Parameter | Value |
-|---|---|
-| Population size | 100 |
-| Archive size | 100 |
-| Independent runs | 10 (seeds 1–10; DTLZ1/3/6 old set: 5) |
-| Crossover | SBX, probability 0.9, η = 20 |
-| Mutation | polynomial, probability 1/n, η = 20 |
-| DTLZ | 12 variables, 3 objectives, 50 reference divisions |
-
-Runner NFE per run: `100 + (G − 1)·200` for `G` generations
-(250 → 49,900; 500 → 99,900; 2000 → 399,900). The legacy ZDT script counts
-`100 + G·100` instead (250 → 25,100).
-
-### Result sets and generation budgets
-
-| Set (`results/data/`) | Benchmarks | Runs | Gens |
-|---|---|---:|---:|
-| `01_zdt_500gen` | ZDT1/2/3/4/6 (runner, 10-variable ZDT4) | 10 | 500 |
-| `01_zdt_500gen/raw_metrics.csv` | ZDT1/2/3/4/6 (legacy script, 30-variable ZDT4) | 10 | 250 |
-| `02_dtlz1-3-6_2000gen` | DTLZ1, DTLZ3, DTLZ6 | 5 | 2000 |
-| `03_dtlz2-4-5-7_and_classical6_250gen` | DTLZ2/4/5/7, Binh1, Deb, Deb2, Fonseca, Fonseca2, Kursawe | 10 | 250 |
-| `04_dtlz6_250gen_rerun` | DTLZ6 (corrected reference) | 10 | 250 |
-| `05_classical12_new_250gen` | the 12 benchmarks in `classical_extra.py` | 10 | 250 |
-
----
-
-## Metrics
+## 5. Evaluation metrics
 
 | Metric | Meaning | Better |
 |---|---|---|
-| Hypervolume (HV) | volume dominated by the approximation up to a reference point | higher |
-| IGD | mean distance from each reference-front point to its nearest obtained point (convergence + coverage) | lower |
-| GD | RMS distance from each obtained point to its nearest reference-front point (convergence) | lower |
-| Spacing | standard deviation of nearest-neighbour distances (uniformity) | lower |
-
-The runner chooses the HV reference point per benchmark as the maximum of the
-reference front in each objective plus a margin of `max(0.1, 10 % of the range)`
-(for ZDT1 this is `[1.1, 1.1]`). HV values are therefore comparable across
-algorithms on the *same* benchmark, not across benchmarks. The legacy ZDT script
-used a fixed `[1.1, 1.1]`, which is why its ZDT3 HV differs from the runner's.
-
-Metrics are computed on the final archive (feasible members only for constrained
-problems). Runs with no feasible solution would be recorded as NaN; none occurred.
+| **HV** | exact hypervolume w.r.t. a reference point (max of true front + max(0.1, 10 % of range)) | larger |
+| **IGD** | mean distance from each true-front point to the nearest obtained point | smaller |
+| **GD** | root-mean-square distance from each obtained point to the true front | smaller |
+| **Spacing** | standard deviation of nearest-neighbour distances | smaller |
+| **1/PSP, 1/HV, IGDX, IGDF** | MMO indicators (decision- and objective-space) | smaller |
+| **CEC 2022 error** | f(x) − f* at 16 evaluation checkpoints | smaller |
 
 ---
 
-## Results
+## 6. Results
 
-Mean ± standard deviation over the runs. **Compare only rows with equal `Gens`.**
-Generated from `results/all_benchmarks_summary.csv`.
+### 6.1 Standard suite — 30 benchmarks (mean of 5 runs)
 
-| Benchmark | Runs | Gens | HV ↑ | IGD ↓ | GD ↓ | Spacing ↓ | Note |
-|---|---:|---:|---|---|---|---|---|
-| ZDT1 | 10 | 500 | 0.8706 ± 0.00015 | 0.004177 ± 6.8e-05 | 0.002081 ± 0.0002 | 0.002296 ± 0.0002 |  |
-| ZDT2 | 10 | 500 | 0.5377 ± 0.00018 | 0.003995 ± 4e-05 | 0.0009676 ± 0.00021 | 0.002255 ± 0.00018 |  |
-| ZDT3 | 10 | 500 | 1.124 ± 0.00013 | 0.004902 ± 9.3e-05 | 0.0009639 ± 0.00012 | 0.003301 ± 0.00041 |  |
-| ZDT4 | 10 | 500 | 0.8698 ± 0.0012 | 0.004301 ± 0.00042 | 0.002224 ± 0.00054 | 0.002136 ± 0.00023 |  |
-| ZDT6 | 10 | 500 | 0.4375 ± 0.00033 | 0.003774 ± 0.00015 | 0.001859 ± 0.00024 | 0.001767 ± 0.00014 |  |
-| DTLZ1 | 5 | 2000 | 0.1867 ± 0.0014 | 0.02508 ± 0.0037 | 0.9476 ± 1.8 | 0.7139 ± 1.5 | 5 runs; 2000 generations |
-| DTLZ2 | 10 | 250 | 0.7201 ± 0.0029 | 0.05699 ± 0.00088 | 0.02386 ± 0.0034 | 0.01449 ± 0.0022 |  |
-| DTLZ3 | 5 | 2000 | 0.7299 ± 0.0052 | 0.05445 ± 0.0025 | 0.1268 ± 0.14 | 0.08565 ± 0.13 | 5 runs; 2000 generations |
-| DTLZ4 | 10 | 250 | 0.644 ± 0.13 | 0.1716 ± 0.18 | 0.01944 ± 0.0073 | 0.01053 ± 0.0051 |  |
-| DTLZ5 | 10 | 250 | 0.1507 ± 0.00022 | 0.004515 ± 0.00051 | 0.009513 ± 0.00024 | 0.002687 ± 0.00035 |  |
-| DTLZ6 | 10 | 250 | 0 ± 0 | 1.386 ± 0.062 | 1.932 ± 0.16 | 0.1078 ± 0.026 | 250 generations did not converge (HV 0); old 2000-gen result used a wrong reference front |
-| DTLZ7 | 10 | 250 | 1.418 ± 0.068 | 0.09322 ± 0.089 | 0.1081 ± 0.051 | 0.0315 ± 0.011 |  |
-| Binh1 | 10 | 250 | 2597 ± 0.43 | 0.2223 ± 0.0025 | 0.06278 ± 0.012 | 0.1404 ± 0.022 |  |
-| Binh3 | 10 | 250 | 0.001 ± 0 | 0 ± 0 | 0 ± 0 | 0 ± 0 | single-point front; HV is only the reference-point margin |
-| Deb | 10 | 250 | 0.5385 ± 3.1e-05 | 0.003919 ± 5.2e-05 | 0.0004595 ± 2.6e-05 | 0.002367 ± 0.00018 |  |
-| Deb2 | 10 | 250 | 0.8346 ± 5.5e-05 | 0.004472 ± 0.00012 | 0.003058 ± 0.0043 | 0.003885 ± 0.0035 |  |
-| Fonseca | 10 | 250 | 0.2714 ± 6.6e-05 | 0.004659 ± 7e-05 | 0.001002 ± 0.00015 | 0.00282 ± 0.00039 |  |
-| Fonseca2 | 10 | 250 | 0.5065 ± 0.0002 | 0.004023 ± 9.1e-05 | 0.001494 ± 0.00023 | 0.002213 ± 0.00018 |  |
-| Kursawe | 10 | 250 | 41.1 ± 0.012 | 0.1526 ± 0.0022 | 0.2417 ± 0.0031 | 0.08191 ± 0.00066 |  |
-| Laumanns | 10 | 250 | 16.63 ± 0.00097 | 0.01682 ± 7.2e-05 | 0.002106 ± 0.00049 | 0.008305 ± 0.0007 |  |
-| Murata | 10 | 250 | 3.894 ± 0.00055 | 0.00966 ± 0.00011 | 0.002605 ± 0.0022 | 0.005859 ± 0.00046 |  |
-| Quagliarella | 10 | 250 | 8.767 ± 0.086 | 0.1727 ± 0.02 | 0.01144 ± 0.0012 | 0.008255 ± 0.001 | front extremes not reached (needs all 16 variables at 0 or 1.5) |
-| Rendon | 10 | 250 | 38.94 ± 0.018 | 0.09268 ± 0.0026 | 0.01982 ± 0.0014 | 0.05633 ± 0.0068 |  |
-| Rendon2 | 10 | 250 | 23.54 ± 0.0018 | 0.02553 ± 0.00046 | 0.003737 ± 0.00032 | 0.01489 ± 0.0011 |  |
-| Schaffer | 10 | 250 | 16.63 ± 0.0012 | 0.01702 ± 0.00011 | 0.001823 ± 0.00011 | 0.00939 ± 0.00058 |  |
-| Schaffer2 | 10 | 250 | 25.98 ± 0.0018 | 0.02279 ± 0.00054 | 0.00362 ± 0.00011 | 0.01298 ± 0.0016 |  |
-| Srinivas | 10 | 250 | 3.492e+04 ± 8.7 | 0.8674 ± 0.016 | 0.3102 ± 0.056 | 0.5198 ± 0.072 |  |
-| Tanaka | 10 | 250 | 0.5122 ± 0.00032 | 0.004212 ± 0.00032 | 0.002047 ± 0.00014 | 0.003013 ± 0.00051 |  |
-| Viennet | 10 | 250 | 32.42 ± 0.035 | 0.1282 ± 0.0045 | 0.1382 ± 0.019 | 0.0393 ± 0.0037 |  |
-| Viennet2 | 10 | 250 | 0.8389 ± 0.00041 | 0.01226 ± 0.00071 | 0.01793 ± 0.0017 | 0.005969 ± 0.00051 |  |
+| Benchmark | Pop. | Evaluations | HV ↑ | IGD ↓ | GD ↓ | Spacing ↓ |
+|---|---|---|---|---|---|---|
+| **ZDT1** | 100 | 100,100 | 0.8717 | 0.00388 | 0.00161 | 0.00211 |
+| **ZDT2** | 100 | 100,100 | 0.5385 | 0.00389 | 0.000743 | 0.00208 |
+| **ZDT3** | 100 | 100,100 | 1.125 | 0.00484 | 0.000875 | 0.00321 |
+| **ZDT4** | 100 | 100,100 | 0.8716 | 0.00386 | 0.00158 | 0.00198 |
+| **ZDT6** | 100 | 100,100 | 0.4393 | 0.00314 | 0.000592 | 0.00162 |
+| **DTLZ1** | 200 | 600,200 | 0.1915 | 0.0137 | 0.65 | 0.629 |
+| **DTLZ2** | 200 | 600,200 | 0.7541 | 0.039 | 0.0218 | 0.0105 |
+| **DTLZ3** | 200 | 600,200 | 0.7647 | 0.036 | 0.187 | 0.172 |
+| **DTLZ4** | 200 | 600,200 | 0.7561 | 0.0387 | 0.0191 | 0.00845 |
+| **DTLZ5** | 200 | 600,200 | 0.1524 | 0.00207 | 0.00909 | 0.0011 |
+| **DTLZ6** | 200 | 600,200 | 0.1286 | 0.0352 | 0.0413 | 0.00247 |
+| **DTLZ7** | 200 | 600,200 | 1.514 | 0.0395 | 0.0591 | 0.0231 |
+| **Binh1** | 100 | 100,100 | 2597 | 0.221 | 0.0578 | 0.13 |
+| **Binh3** | 100 | 100,100 | 0.001 | 0 | 0 | 0 |
+| **Deb** | 100 | 100,100 | 0.5385 | 0.00388 | 0.000451 | 0.0024 |
+| **Deb2** | 100 | 100,100 | 0.8347 | 0.00451 | 0.00171 | 0.00247 |
+| **Fonseca** | 100 | 100,100 | 0.2714 | 0.00475 | 0.00105 | 0.00335 |
+| **Fonseca2** | 100 | 100,100 | 0.5065 | 0.004 | 0.00148 | 0.00206 |
+| **Kursawe** | 100 | 100,100 | 41.14 | 0.154 | 0.242 | 0.0832 |
+| **Laumanns** | 100 | 100,100 | 16.64 | 0.0167 | 0.00187 | 0.00786 |
+| **Murata** | 100 | 100,100 | 3.895 | 0.00954 | 0.00161 | 0.00557 |
+| **Quagliarella** | 100 | 100,100 | 9.097 | 0.104 | 0.0124 | 0.00861 |
+| **Rendon** | 100 | 100,100 | 38.93 | 0.0953 | 0.0192 | 0.0612 |
+| **Rendon2** | 100 | 100,100 | 23.54 | 0.0258 | 0.00387 | 0.016 |
+| **Schaffer** | 100 | 100,100 | 16.63 | 0.017 | 0.00194 | 0.00942 |
+| **Schaffer2** | 100 | 100,100 | 25.98 | 0.0227 | 0.00363 | 0.0136 |
+| **Srinivas** | 100 | 100,100 | 3.493e+04 | 0.866 | 0.312 | 0.536 |
+| **Tanaka** | 100 | 100,100 | 0.5132 | 0.00344 | 0.00101 | 0.00251 |
+| **Viennet** | 100 | 100,100 | 32.43 | 0.126 | 0.138 | 0.0414 |
+| **Viennet2** | 100 | 100,100 | 0.8391 | 0.012 | 0.0187 | 0.00599 |
 
-### What the results show
+> HV values are not comparable *between* problems because the reference point differs.
 
-* **Converged well:** ZDT1/2/3/4/6 at 500 generations, Deb, Fonseca, Fonseca2,
-  Laumanns, Murata, Rendon2, Schaffer, Schaffer2, Tanaka, Viennet2, DTLZ5, Deb2
-  (IGD ≈ 0.004–0.03 with tiny run-to-run variation).
-* **Hard at the budgets used:** DTLZ6 (250 generations: HV 0), DTLZ4 and DTLZ7
-  (large run-to-run variance at 250), Quagliarella (the extremes of the front
-  need all 16 variables at exactly 0 or 1.5), Kursawe and Rendon/Viennet (sparse
-  coverage of extremes, IGD ≈ 0.1–0.15).
-* **Binh3:** the true front is one point (x1 = x2 = 1e-6). All runs reached it
-  (IGD = GD = 0); its HV is just the 0.1 reference-point margin and carries no
-  information.
-* **Srinivas** values are in the units of a front spanning f1 ∈ [10, 225], so
-  IGD 0.87 is ≈ 0.4 % of the front length; its HV is not comparable with other
-  problems.
+### 6.2 Obtained front vs true front (seed 1)
 
-### Legacy ZDT results at 250 generations (PESA-II protocol)
+Red = SPEA2 (obtained), grey = true Pareto front. The hypervolume recomputed from the saved fronts reproduced the stored value for all 30 problems (`experiments/save_fronts.py`).
 
-Produced by `experiments/zdt_benchmarks.py` (population/archive 100,
-250 generations, seeds 1–10, ZDT4 with 30 variables, fixed HV reference
-`[1.1, 1.1]`); stored in `results/data/01_zdt_500gen/raw_metrics.csv`.
+**ZDT** — all five fronts lie on the true front, including the disconnected ZDT3.
 
-| Benchmark | HV ↑ | IGD ↓ | GD ↓ | Spacing ↓ |
+<img src="docs/images/cmp_zdt.png" width="100%"/>
+
+**DTLZ** — surfaces covered; DTLZ1 and DTLZ3 show one stray point (harder convergence).
+
+<img src="docs/images/cmp_dtlz.png" width="80%"/>
+
+**Classical problems**
+
+<img src="docs/images/cmp_cls_a.png" width="100%"/>
+<img src="docs/images/cmp_cls_b.png" width="100%"/>
+<img src="docs/images/cmp_cls_c.png" width="100%"/>
+
+Constrained Tanaka and Srinivas are matched closely. Viennet's reference front is only sampled, so part of the visible scatter is the reference, but some points are genuinely not yet converged. Binh3's reference is degenerate (HV 0.001) and should not be interpreted.
+
+**Mean IGD of all 30 benchmarks** (log scale, lower is better)
+
+<img src="docs/images/igd_bar.png" width="100%"/>
+
+### 6.3 CEC 2020 multimodal multi-objective — 24 problems (mean of 3 runs)
+
+| Problem | n_ops | 1/PSP | 1/HV | IGDX | IGDF |
+|---|---|---|---|---|---|
+| **MMF1** | 2 | 0.108 | 1.15 | 0.104 | 0.00388 |
+| **MMF2** | 2 | 0.122 | 1.18 | 0.105 | 0.0335 |
+| **MMF4** | 2 | 0.161 | 1.86 | 0.161 | 0.00408 |
+| **MMF5** | 2 | 0.166 | 1.15 | 0.164 | 0.004 |
+| **MMF7** | 2 | 0.0603 | 1.15 | 0.0597 | 0.00406 |
+| **MMF8** | 2 | 1.1 | 2.38 | 0.852 | 0.00411 |
+| **MMF10** | 1 | 0.13 | 0.0806 | 0.13 | 0.112 |
+| **MMF11** | 1 | 0.00951 | 0.069 | 0.00951 | 0.0245 |
+| **MMF12** | 1 | 0.00215 | 0.636 | 0.00215 | 0.00415 |
+| **MMF13** | 1 | 0.272 | 0.0544 | 0.135 | 0.0335 |
+| **MMF14** | 2 | 0.179 | 0.169 | 0.178 | 0.109 |
+| **MMF15** | 1 | 0.0547 | 0.0932 | 0.0547 | 0.106 |
+| **MMF1_e** | 2 | 5.49 | 1.15 | 2.26 | 0.00431 |
+| **MMF14_a** | 2 | 0.128 | 0.17 | 0.126 | 0.115 |
+| **MMF15_a** | 1 | 0.0722 | 0.0941 | 0.0721 | 0.121 |
+| **MMF10_l** | 2 | 10 | 0.0806 | 0.201 | 0.189 |
+| **MMF11_l** | 2 | 1.64 | 0.069 | 0.253 | 0.102 |
+| **MMF12_l** | 2 | 4.82 | 0.636 | 0.247 | 0.0839 |
+| **MMF13_l** | 2 | 1.43 | 0.0544 | 0.35 | 0.159 |
+| **MMF15_l** | 2 | 0.509 | 0.0932 | 0.274 | 0.21 |
+| **MMF15_a_l** | 2 | 0.276 | 0.0941 | 0.222 | 0.202 |
+| **MMF16_l1** | 3 | 0.275 | 0.0921 | 0.213 | 0.184 |
+| **MMF16_l2** | 3 | 0.551 | 0.0922 | 0.325 | 0.255 |
+| **MMF16_l3** | 4 | 0.375 | 0.0923 | 0.266 | 0.218 |
+
+<img src="docs/images/mmo_spaces.png" width="90%"/>
+
+The objective-space front is found (IGDF ≈ 4·10⁻³ on the two-objective problems), but the decision-space indicators (1/PSP, IGDX) are much larger: SPEA2 has no decision-space niching and collapses onto one or a few of the equivalent Pareto sets (worst: MMF8). This is the expected limit of plain SPEA2 and is reported as is.
+
+### 6.4 CEC 2022 single-objective — 12 functions, 30 runs (error after full budget)
+
+| Function | D=10 best | D=10 mean | D=10 std | D=20 best | D=20 mean | D=20 std |
+|---|---|---|---|---|---|---|
+| **F1** | 0.0306 | 0.295 | 0.278 | 0.238 | 1.56 | 0.848 |
+| **F2** | 0.119 | 6.33 | 3.21 | 5.06 | 47.3 | 12.5 |
+| **F3** | 0.000756 | 0.00765 | 0.0165 | 0.000205 | 0.00249 | 0.00244 |
+| **F4** | 5.97 | 11.8 | 3.27 | 19.9 | 36.2 | 9.72 |
+| **F5** | 4.56e-05 | 0.398 | 0.434 | 0.000155 | 7.01 | 7.89 |
+| **F6** | 69.7 | 1.45e+03 | 1.54e+03 | 68.9 | 4.56e+03 | 4.91e+03 |
+| **F7** | 0.00955 | 8.94 | 9.85 | 22.6 | 44 | 18.3 |
+| **F8** | 0.0375 | 14.6 | 8.94 | 20.5 | 23.2 | 5.93 |
+| **F9** | 229 | 229 | 5.22e-06 | 181 | 181 | 0.000322 |
+| **F10** | 100 | 115 | 38.5 | 5.43e-05 | 80 | 66.2 |
+| **F11** | 0.0226 | 45.2 | 70.1 | 300 | 303 | 18.2 |
+| **F12** | 163 | 166 | 1.54 | 234 | 252 | 9.19 |
+
+<img src="docs/images/cec2022_heatmap.png" width="60%"/>
+
+F1, F3 and F5 are solved to small errors; F2, F4, F6 and F7 only partly. On F9 the algorithm stalls at the same local optimum in all 30 runs (std ≈ 5·10⁻⁶) — stagnation, not good convergence. These runs keep their original settings and are **not** aligned with the NSGA-II protocol.
+
+**Algorithm complexity** (as prescribed by the CEC 2022 report):
+
+| D | T0 (s) | T1 (s) | T2 (s) | (T2−T1)/T0 |
 |---|---|---|---|---|
-| ZDT1 | 0.868337 ± 0.000633 | 0.004843 ± 0.000267 | 0.002902 ± 0.000373 | 0.002299 ± 0.000146 |
-| ZDT2 | 0.535224 ± 0.000355 | 0.004603 ± 0.000135 | 0.002260 ± 0.000244 | 0.002328 ± 0.000304 |
-| ZDT3 | 1.315779 ± 0.025962 | 0.010841 ± 0.017632 | 0.002144 ± 0.000329 | 0.003464 ± 0.000393 |
-| ZDT4 | 0.000000 ± 0.000000 | 4.241244 ± 1.832326 | 5.112376 ± 2.231289 | 0.592988 ± 1.158240 |
-| ZDT6 | 0.491774 ± 0.001206 | 0.009988 ± 0.000822 | 0.009618 ± 0.000945 | 0.001935 ± 0.000209 |
-
-Reported PESA-II baseline under the same protocol (for comparison only):
-
-| Benchmark | HV ↑ | IGD ↓ | GD ↓ | Spacing ↓ |
-|---|---|---|---|---|
-| ZDT1 | 0.8605 ± 0.0023 | 0.0103 ± 0.0017 | 0.0015 ± 0.0003 | 0.0084 ± 0.0009 |
-| ZDT2 | 0.5232 ± 0.0033 | 0.0110 ± 0.0012 | 0.0015 ± 0.0004 | 0.0078 ± 0.0011 |
-| ZDT3 | 0.7167 ± 0.0091 | 0.0161 ± 0.0212 | 0.0006 ± 0.0002 | 0.0065 ± 0.0008 |
-| ZDT4 | 0.8445 ± 0.0139 | 0.0262 ± 0.0203 | 0.2838 ± 0.4165 | 0.8271 ± 1.2527 |
-| ZDT6 | 0.5908 ± 0.0262 | 0.0522 ± 0.0155 | 1.2607 ± 0.2148 | 0.3295 ± 0.3700 |
-
-Against PESA-II at 250 generations, SPEA2 here has higher HV and lower IGD and
-Spacing on ZDT1/2, lower IGD and Spacing on ZDT3 (the ZDT3 HV values are *not*
-directly comparable because the HV reference policy has not been reconciled),
-much lower IGD/GD/Spacing but lower HV on ZDT6, and does **not** converge on the
-30-variable ZDT4 within 250 generations (HV 0). With 500 generations and the
-10-variable ZDT4 of the runner set, ZDT4 converges (HV 0.870, IGD 0.0043).
+| 10 | 0.0303 | 1.52 | 4.26 | 90.37 |
+| 20 | 0.0303 | 4.11 | 7.38 | 108.1 |
 
 ---
 
-## CEC competition suites
+## 7. How to run
 
-Two additional suites from the CEC competitions are included, with the
-organisers' data (`data/`, see `data/README.md`) and evaluation protocol. Their
-benchmarks are **not** part of the 30-problem registry or of
-`all_benchmarks_summary.csv`.
+```bash
+python3 -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 
-### CEC 2020 multimodal multi-objective (24 problems)
+python -m pytest -q                                      # 312 tests
 
-`src/benchmarks/cec2020_mmo.py` ports MMF1, MMF2, MMF4, MMF5, MMF7, MMF8, MMF10-MMF15,
-MMF1_e, MMF14_a, MMF15_a, the "local Pareto set" variants (MMF10_l, MMF11_l,
-MMF12_l, MMF13_l, MMF15_l, MMF15_a_l) and MMF16_l1/l2/l3, with the organisers'
-bounds, hypervolume reference points and number of Pareto sets (`N_ops`). The
-reference Pareto sets and fronts are the organisers' data. A test checks that
-the ported objective functions reproduce the reference fronts (row by row for 17
-problems, as a set or on the analytic front for the others).
+# standard suite (team protocol preset; existing files are never overwritten)
+python experiments/run_benchmarks.py --benchmarks ZDT1 DTLZ2 Tanaka --runs 5 --seed-start 1 --output-dir results/data/my_run
 
-Protocol (`experiments/run_cec2020_mmo.py`): 21 runs, population = archive =
-200 x N_ops, MaxFES = 10000 x N_ops (= 50 generations), indicators 1/PSP, 1/HV,
-IGDX and IGDF (`src/metrics/mmo.py`). SPEA2 here is the project's SPEA2 with no
-decision-space niching, so it is a baseline. Results of the full run (mean ± std
-over 21 runs, all smaller-is-better):
+python experiments/run_cec2020_mmo.py  --output-dir results/data/my_mmo       # 24 MMO problems
+python experiments/run_cec2022.py      --output-dir results/data/my_cec2022   # 12 functions x D10/20
+python experiments/save_fronts.py                                              # obtained fronts, seed 1
+python experiments/export_comparison.py                                        # tables for comparing algorithms
+```
 
-| Problem | N_ops | 1/PSP | 1/HV | IGDX | IGDF |
-|---|---:|---|---|---|---|
-| MMF1 | 2 | 0.03774 ± 0.0047 | 1.143 ± 0.00012 | 0.0376 ± 0.0047 | 0.001203 ± 6.4e-05 |
-| MMF2 | 2 | 0.02277 ± 0.0076 | 1.153 ± 0.003 | 0.02265 ± 0.0076 | 0.006122 ± 0.0016 |
-| MMF4 | 2 | 0.02297 ± 0.0048 | 1.846 ± 0.0001 | 0.02284 ± 0.0047 | 0.001067 ± 7.4e-05 |
-| MMF5 | 2 | 0.07027 ± 0.0083 | 1.143 ± 7.5e-05 | 0.07002 ± 0.0083 | 0.001189 ± 3.6e-05 |
-| MMF7 | 2 | 0.02051 ± 0.0038 | 1.143 ± 3.8e-05 | 0.0204 ± 0.0038 | 0.001072 ± 2.8e-05 |
-| MMF8 | 2 | 0.3148 ± 0.1 | 2.363 ± 0.00056 | 0.2831 ± 0.084 | 0.001077 ± 2.1e-05 |
-| MMF10 | 1 | 0.03863 ± 0.11 | 0.07847 ± 0.0025 | 0.03862 ± 0.11 | 0.03651 ± 0.088 |
-| MMF11 | 1 | 0.005335 ± 0.00034 | 0.06887 ± 4.2e-06 | 0.005334 ± 0.00034 | 0.01258 ± 0.00051 |
-| MMF12 | 1 | 0.001505 ± 0.00015 | 0.6354 ± 2.4e-05 | 0.001505 ± 0.00015 | 0.001984 ± 8e-05 |
-| MMF13 | 1 | 0.06882 ± 0.012 | 0.05426 ± 6.3e-06 | 0.0633 ± 0.009 | 0.01629 ± 0.00071 |
-| MMF14 | 2 | 0.04752 ± 0.0032 | 0.1619 ± 0.00015 | 0.04749 ± 0.0032 | 0.05248 ± 0.0014 |
-| MMF15 | 1 | 0.04141 ± 0.001 | 0.09191 ± 0.0001 | 0.04137 ± 0.001 | 0.07724 ± 0.0017 |
-| MMF1_e | 2 | 3.382 ± 2.2 | 1.144 ± 0.00044 | 1.65 ± 0.62 | 0.001659 ± 0.00013 |
-| MMF14_a | 2 | 0.0593 ± 0.0045 | 0.1623 ± 0.00014 | 0.0592 ± 0.0042 | 0.05432 ± 0.0013 |
-| MMF15_a | 1 | 0.05164 ± 0.0011 | 0.09226 ± 0.00015 | 0.05161 ± 0.0011 | 0.08253 ± 0.0024 |
-| MMF10_l | 2 | 2.949 ± 4.6 | 0.07763 ± 1.1e-06 | 0.1743 ± 0.019 | 0.1667 ± 0.019 |
-| MMF11_l | 2 | 2.417 ± 0.61 | 0.06881 ± 1e-06 | 0.2496 ± 0.0055 | 0.08911 ± 0.0051 |
-| MMF12_l | 2 | 3.064 ± 1 | 0.6352 ± 9.8e-06 | 0.2455 ± 0.003 | 0.07901 ± 0.0067 |
-| MMF13_l | 2 | 0.6431 ± 0.22 | 0.0542 ± 2.1e-06 | 0.278 ± 0.022 | 0.1299 ± 0.019 |
-| MMF15_l | 2 | 0.4553 ± 0.072 | 0.09071 ± 3.2e-05 | 0.2553 ± 0.0047 | 0.1727 ± 0.0034 |
-| MMF15_a_l | 2 | 0.2482 ± 0.0092 | 0.09092 ± 4.3e-05 | 0.2026 ± 0.0044 | 0.1627 ± 0.0038 |
-| MMF16_l1 | 3 | 0.1822 ± 0.016 | 0.08919 ± 2.6e-05 | 0.1477 ± 0.0035 | 0.1297 ± 0.003 |
-| MMF16_l2 | 3 | 0.569 ± 0.11 | 0.08916 ± 3.3e-05 | 0.3219 ± 0.01 | 0.2195 ± 0.0064 |
-| MMF16_l3 | 4 | 0.2489 ± 0.027 | 0.08894 ± 1.9e-05 | 0.1975 ± 0.0065 | 0.1677 ± 0.0039 |
-
-Figures: `results/figures/mmf*.png` (obtained vs reference set and front).
-Details, observations and data issues found in the organisers' settings:
-`results/reports/cec2020_mmo_report.md`.
-
-### CEC 2022 single-objective (12 functions)
-
-`src/benchmarks/cec2022.py` is a line-by-line port of the organisers' C
-reference (`cec22_test_func.cpp`) using the official shift / rotation / shuffle
-data: F1-F5 basic (Zakharov, Rosenbrock, Expanded Schaffer, Rastrigin, Levy),
-F6-F8 hybrid, F9-F12 composition, for D = 10 and 20, search range [-100, 100]^D.
-The organisers' Python version was not used because it is not functional (it
-calls an undefined function, among other problems). The C code's quirks are
-reproduced and documented in the module: F3 ignores the rotation, F4's step
-has no effect, Levy uses `sin(pi*w + 1)`, and the Schaffer F7 component of F7
-reads its input from index 0. Every function equals its published optimum F*
-at the shifted optimum (tested).
-
-Protocol (`experiments/run_cec2022.py`): 30 runs with seeds from the official
-`Rand_Seeds.txt`, MaxFES 200,000 (D = 10) / 1,000,000 (D = 20), stop at error
-1e-8, best error recorded at the 16 checkpoints `floor(D^(k/5-3) * MaxFES)`
-plus FEterm, and the 17 x 30 result files in the competition format. SPEA2 runs
-with a single objective (Pareto dominance reduces to ranking) and is untuned.
-**The full 12-function experiment has not been run yet**: a single run takes
-about 12 s (F1, D = 10) up to about 70 s (composition F9, D = 10), and D = 20
-runs with 1M evaluations take several times longer, so the full experiment is
-roughly 15-20 CPU-hours.
+Results are deterministic for a given seed. See `results/README.md` and `results/comparison/README.md` for file layouts and exact metric definitions.
 
 ---
 
-## Corrections made during verification
+## 8. Verification and testing
 
-Found while checking results against the true fronts; all fixed and covered by
-regression tests. Affected earlier runs are kept in
-`results/data/superseded_wrong_reference/` and `results/figures/archive/`.
+The 312 tests cover metric values against hand calculations, benchmark optima and true fronts, constraint handling, the CEC 2022 functions against independent formulas (including quirks of the official C code), SHA-256 checksums of every official data file, the CEC 2020 reference data, and regression tests proving the fast SPEA2 internals identical to the plain version.
 
-| Problem | Error | Effect of the fix |
-|---|---|---|
-| Srinivas | first reference front covered only x1 = −2.5; the true Pareto set also lies on the constraint line and circle | front now spans f1 ∈ [10, 225]; rerun |
-| Deb2 | reference was the whole x2 = 0 curve (~78 % dominated points) | IGD 0.185 → 0.0045; rerun |
-| DTLZ5 / DTLZ6 | reference used angle 0.25 instead of 0.5, so f1 ≠ f2 (not on the true front) | DTLZ5 IGD 0.245 → 0.0045; rerun. DTLZ6 old 2000-gen result is **not trusted** |
+```text
+$ python -m pytest -q
+........................................................................ [ 23%]
+........................................................................ [ 46%]
+........................................................................ [ 69%]
+........................................................................ [ 92%]
+........................                                                 [100%]
+312 passed in 12.58s
+```
 
----
-
-## Known limitations
-
-* **Mixed generation budgets** (250 / 500 / 2000) across result sets; compare
-  within equal `Gens` only.
-* **DTLZ6** has no reliable result: the old 2000-generation run used the wrong
-  reference front, and the corrected 250-generation run did not converge.
-* **DTLZ1 and DTLZ3** have 5 runs (2000 generations), not 10.
-* The two ZDT sets differ in more than generations (ZDT4 has 30 variables in the
-  legacy 250-generation set and 10 in the runner set).
-* **Kursawe's** reference front has only 41 points, so its IGD is coarse.
-  ZDT3's reference contains ~4 dominated points out of 1000 (negligible).
-* **Numerical reference fronts** (Quagliarella, Srinivas, Tanaka, Viennet2) are
-  accurate to roughly 0.002–0.005 in tests; they are not exact analytical fronts.
-* **Schaffer** uses bounds [−10, 10]; the literature uses 10 up to 1e5.
-  **Tanaka's** lower bound is 0 rather than strictly positive (`atan2` handles it).
-* Mostly pure Python with NumPy-vectorised SPEA2 internals; the experiments in
-  `results/` before the optimisation took roughly 20–180 s per 250-generation run,
-  the same runs are now several times faster with identical results.
-* **CEC 2022** has no results yet (full experiment not run, about 15-20 CPU-hours);
-  SPEA2 is a multi-objective algorithm run here with a single objective.
-* **CEC 2020 MMO:** SPEA2 has no decision-space niching, and the competition's budget
-  is only 50 generations, so the results are a baseline. Several issues in the
-  organisers' own data and settings (MMF13_l bounds, HV reference points of
-  MMF12_l / MMF13_l, MMF2 boundary point, 2-objective-only MATLAB hypervolume)
-  are replicated and documented in `results/reports/cec2020_mmo_report.md`.
-* `experiments/zdt_benchmarks.py` still writes to `results/raw_metrics.csv` if
-  re-run; use `run_benchmarks.py --output-dir` instead.
+Reference fronts of Srinivas, Deb2, DTLZ5 and DTLZ6 were corrected after plots showed a mismatch; tests now guard them.
 
 ---
 
-## Reproducibility and testing
+## 9. Conclusion, limitations and future work
 
-* Seeds are `seed_start … seed_start + runs − 1` (default 1–10) and are stored in
-  every raw CSV row, together with runtime, archive size and NFE.
-* Existing result files are never overwritten by the runner without `--overwrite`.
-* `python -m pytest` runs 300 tests: metrics, DTLZ functions, objective values at
-  hand-computed points, bounds and dimensions of the 12 added classical
-  benchmarks, reference-front validity (finite, non-dominated, not beaten by random
-  feasible samples, brute-force comparison for Srinivas), constraint dominance,
-  tiny SPEA2 smoke runs, **exact equivalence of the optimised SPEA2 code with the
-  original pure-Python code** (random cases and full-run digests), the CEC 2022
-  suite (F(o) = F*, official-data checksums, group sizes, seeds, budget and
-  checkpoint tracking) and the CEC 2020 MMO suite (objective vs reference front,
-  indicators, runner).
-* Exact reproduction needs the same Python and NumPy versions (see
-  `requirements.txt`).
+**Conclusion**
+- SPEA2 was implemented from scratch with an exact evaluation budget, constraint handling and optimised internals proven identical to the plain version.
+- It approximates the Pareto fronts of ZDT, DTLZ and classical problems well; all runs are reproducible bit-for-bit.
+- On CEC 2020 MMO the front is found but the multiple Pareto sets are not preserved; on CEC 2022 easy functions are solved while composition/hybrid functions stagnate.
+
+**Limitations** — only 5 runs (3 for MMO) following the shared protocol, no significance tests; some reference fronts are sampled; NSGA-II numbers are not included here.
+
+**Future work** — Wilcoxon comparison against NSGA-II, decision-space niching for MMO, many-objective benchmarks, parallel evaluation.
 
 ---
 
-## License
+## 10. References
 
-This project is intended for educational use.
+1. E. Zitzler, M. Laumanns, L. Thiele, *SPEA2: Improving the Strength Pareto Evolutionary Algorithm*, TIK-Report 103, ETH Zurich, 2001.
+2. E. Zitzler, L. Thiele, *Multiobjective evolutionary algorithms: a comparative case study and the Strength Pareto approach*, IEEE TEVC 3(4), 1999.
+3. K. Deb, A. Pratap, S. Agarwal, T. Meyarivan, *A fast and elitist multiobjective genetic algorithm: NSGA-II*, IEEE TEVC 6(2), 2002.
+4. E. Zitzler, K. Deb, L. Thiele, *Comparison of multiobjective evolutionary algorithms: empirical results*, Evolutionary Computation 8(2), 2000.
+5. K. Deb, L. Thiele, M. Laumanns, E. Zitzler, *Scalable multi-objective optimization test problems*, CEC 2002.
+6. J. Liang, C. Yue, B. Qu et al., *Problem definitions and evaluation criteria for the CEC 2020 competition on multimodal multiobjective optimization*, technical report.
+7. A. Kumar, K. Price, A. W. Mohamed, A. A. Hadi, P. N. Suganthan, *Problem definitions and evaluation criteria for the CEC 2022 competition on single objective bound constrained numerical optimization*, technical report, 2021.
+8. E. Zitzler, L. Thiele, *Multiobjective optimization using evolutionary algorithms — a comparative case study*, PPSN V, 1998.
+9. D. A. Van Veldhuizen, G. B. Lamont, *Multiobjective evolutionary algorithm research: a history and analysis*, TR-98-03, AFIT, 1998.
+10. J. R. Schott, *Fault tolerant design using single and multicriteria genetic algorithm optimization*, M.S. thesis, MIT, 1995.
+11. K. Deb, R. B. Agrawal, *Simulated binary crossover for continuous search space*, Complex Systems 9(2), 1995.

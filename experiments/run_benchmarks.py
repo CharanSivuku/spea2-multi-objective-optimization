@@ -22,6 +22,8 @@ from plot_front import plot_front
 
 from src.spea2 import spea2
 
+from src.metrics.mmo import nondominated_mask
+
 from src.metrics.gd import calculate_gd
 from src.metrics.igd import calculate_igd
 from src.metrics.hypervolume import calculate_hypervolume
@@ -66,34 +68,52 @@ def _calculate_nfe(
     archive_size,
     generations
 ):
-    """Calculate objective evaluations performed by the SPEA2 loop.
+    """Objective evaluations performed by the SPEA2 loop.
 
-    The first generation evaluates only the initial population because
-    the archive is initially empty.
-
-    Subsequent generations evaluate the population and previous archive.
-
-    This formula assumes the archive reaches archive_size after the
-    first generation, as it does in the current experiment setup.
+    Every solution is evaluated exactly once (the archive's objective values
+    are cached), so the total is population_size * generations: the initial
+    population plus one offspring batch per further iteration.
+    ``generations = 1001`` therefore gives 100 + 1000 * 100 = 100,100
+    evaluations. (Older result files used the formula
+    ``P + (G - 1) * (P + A)``, which counted archive re-evaluations.)
     """
+    return population_size * max(0, generations)
 
-    if generations <= 0:
-        return 0
 
-    return (
-        population_size
-        + (generations - 1)
-        * (population_size + archive_size)
-    )
+def protocol_settings(name, protocol="team"):
+    """Population / archive / iterations / mutation index for one benchmark.
+
+    ``team`` is the configuration shared with the NSGA-II comparison:
+
+    * DTLZ1-7: population 200, 3,000 generations = 3001 iterations
+      (200 + 3000 * 200 = 600,200 evaluations), polynomial-mutation index 10;
+    * everything else: population 100, 1,000 generations = 1001 iterations
+      (100 + 1000 * 100 = 100,100 evaluations), mutation index 20.
+
+    ``uniform`` uses the second line for every benchmark.
+    """
+    if protocol == "team" and name.upper().startswith("DTLZ"):
+        return {
+            "population": 200, "archive": 200,
+            "generations": 3001, "mutation_eta": 10,
+        }
+
+    return {
+        "population": 100, "archive": 100,
+        "generations": 1001, "mutation_eta": 20,
+    }
 
 
 def run_one(
     problem,
     population_size=100,
     archive_size=100,
-    generations=250,
-    runs=10,
-    seed_start=1
+    generations=1001,
+    runs=5,
+    seed_start=1,
+    final_set="nondominated",
+    sbx_scheme="deb",
+    mutation_eta=20
 ):
     rows = []
 
@@ -126,7 +146,9 @@ def run_one(
             problem.lower,
             problem.upper,
             problem.objective,
-            getattr(problem, "constraint", None)
+            getattr(problem, "constraint", None),
+            sbx_scheme,
+            mutation_eta
         )
 
         elapsed = time.perf_counter() - started
@@ -144,6 +166,13 @@ def run_one(
             problem.objective(solution)
             for solution in feasible_archive
         ]
+
+        if final_set == "nondominated" and approximation:
+            # score only the non-dominated feasible solutions
+            keep = nondominated_mask(approximation)
+            approximation = [
+                point for point, k in zip(approximation, keep) if k
+            ]
 
         all_approximations.append(
             approximation
@@ -181,6 +210,7 @@ def run_one(
             "spacing": spacing,
             "archive_size": len(archive),
             "feasible_archive_size": len(feasible_archive),
+            "scored_set_size": len(approximation),
             "nfe": nfe,
             "runtime_seconds": elapsed
         })
@@ -201,27 +231,45 @@ def main():
     )
 
     parser.add_argument(
+        "--protocol",
+        choices=["team", "uniform"],
+        default="team",
+        help="team (default): DTLZ pop 200 / 3001 iterations / mutation index 10, "
+             "all others pop 100 / 1001 iterations / index 20; "
+             "uniform: the latter for every benchmark. "
+             "--population/--archive/--generations/--mutation-eta override it."
+    )
+
+    parser.add_argument(
         "--population",
         type=int,
-        default=100
+        default=None
     )
 
     parser.add_argument(
         "--archive",
         type=int,
-        default=100
+        default=None
     )
 
     parser.add_argument(
         "--generations",
         type=int,
-        default=250
+        default=None,
+        help="SPEA2 iterations (1001 = 100 + 1000 * 100 evaluations with population 100)."
+    )
+
+    parser.add_argument(
+        "--mutation-eta",
+        type=float,
+        default=None,
+        help="Polynomial-mutation distribution index."
     )
 
     parser.add_argument(
         "--runs",
         type=int,
-        default=10
+        default=5
     )
 
     parser.add_argument(
@@ -247,6 +295,22 @@ def main():
     )
 
     parser.add_argument(
+        "--final-set",
+        choices=["nondominated", "archive"],
+        default="nondominated",
+        help="Which solutions are scored: the non-dominated feasible ones "
+             "(default) or the whole final archive (old behaviour)."
+    )
+
+    parser.add_argument(
+        "--sbx-scheme",
+        choices=["deb", "per_variable"],
+        default="deb",
+        help="SBX probability scheme: standard Deb (default) or the legacy "
+             "per-variable scheme of the earlier experiments."
+    )
+
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Allow overwriting existing result files."
@@ -261,13 +325,13 @@ def main():
 
     args = parser.parse_args()
 
-    if args.population < 2:
+    if args.population is not None and args.population < 2:
         parser.error("--population must be at least 2")
 
-    if args.archive < 1:
+    if args.archive is not None and args.archive < 1:
         parser.error("--archive must be at least 1")
 
-    if args.generations < 1:
+    if args.generations is not None and args.generations < 1:
         parser.error("--generations must be at least 1")
 
     if args.runs < 1:
@@ -332,13 +396,22 @@ def main():
 
         problem = registry[name]
 
+        settings = protocol_settings(name, args.protocol)
+
         rows, all_approximations = run_one(
             problem,
-            population_size=args.population,
-            archive_size=args.archive,
-            generations=args.generations,
+            population_size=args.population or settings["population"],
+            archive_size=args.archive or settings["archive"],
+            generations=args.generations or settings["generations"],
             runs=args.runs,
-            seed_start=args.seed_start
+            seed_start=args.seed_start,
+            final_set=args.final_set,
+            sbx_scheme=args.sbx_scheme,
+            mutation_eta=(
+                args.mutation_eta
+                if args.mutation_eta is not None
+                else settings["mutation_eta"]
+            )
         )
 
         all_rows.extend(rows)
@@ -398,6 +471,7 @@ def main():
         "spacing",
         "archive_size",
         "feasible_archive_size",
+        "scored_set_size",
         "nfe",
         "runtime_seconds"
     ]

@@ -1,13 +1,17 @@
 """Run SPEA2 on the 24 CEC 2020 multimodal multi-objective (MMO) problems.
 
-Protocol of the technical report (section 2.2) and of the organisers' example
-harness `main.m`:
+Two protocols (``--protocol``):
 
-* 21 independent runs per problem;
-* population size 200 * N_ops, maximum evaluations 10000 * N_ops, i.e.
-  ``MaxFES / popsize = 50`` generations (every new solution is evaluated once);
-* the obtained sets are the non-dominated members of the final archive;
-* indicators (all smaller-is-better): 1/PSP, 1/HV, IGDX, IGDF.
+* ``team`` (default): the protocol shared with the NSGA-II comparison:
+  population = archive = 100, 201 iterations (100 + 200 * 100 = 20,100
+  evaluations), 3 runs with seeds 1-3.
+* ``official``: the technical report (section 2.2) and the organisers'
+  example harness `main.m`: 21 runs, population 200 * N_ops, maximum
+  evaluations 10000 * N_ops, i.e. ``MaxFES / popsize = 50`` iterations.
+
+In both, every new solution is evaluated once, the obtained sets are the
+non-dominated members of the final archive, and the indicators (all
+smaller-is-better) are 1/PSP, 1/HV, IGDX and IGDF.
 
 SPEA2 is the project's real-coded SPEA2 (SBX / polynomial mutation, archive size
 equal to the population size), *not* the organisers' MATLAB SPEA2, and has no
@@ -39,20 +43,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from plot_mmo import plot_mmo  # noqa: E402
 from src.benchmarks.cec2020_mmo import MMO_NAMES, get_problem  # noqa: E402
+from src.metrics import calculate_gd, calculate_spacing  # noqa: E402
 from src.metrics.mmo import mmo_indicators, nondominated_mask  # noqa: E402
 from src.spea2 import spea2  # noqa: E402
 
 INDICATORS = ("rPSP", "rHV", "IGDX", "IGDF")
+# objective-space indicators in the layout of the standard suite (HV is the plain
+# hypervolume, IGD is IGDF), so that MMO results can be compared like the others
+EXTRA = ("HV", "GD", "spacing")
 
 
 def run_once(job):
     """One independent run of one problem (picklable job tuple)."""
-    name, seed, generations = job
+    name, seed, generations = job[:3]
 
     problem = get_problem(name)
     reference_ps = problem.reference_ps()
     reference_pf = problem.reference_pf()
-    pop = problem.population_size
+    pop = job[3] if len(job) > 3 and job[3] else problem.population_size
 
     random.seed(seed)
     started = time.perf_counter()
@@ -73,6 +81,10 @@ def run_once(job):
         ps, pf, reference_ps, reference_pf,
         problem.hv_reference_point, name,
     )
+
+    front = [[float(v) for v in row] for row in pf]
+    indicators["GD"] = calculate_gd(front, reference_pf.tolist())
+    indicators["spacing"] = calculate_spacing(front)
 
     return {
         "problem": name,
@@ -102,16 +114,30 @@ def _stats(values):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--problems", nargs="+", default=list(MMO_NAMES))
-    parser.add_argument("--runs", type=int, default=21)
+    parser.add_argument(
+        "--protocol", choices=["team", "official"], default="team",
+        help="team: pop 100, 201 iterations, 3 runs (default); "
+             "official: CEC 2020 report (pop 200*N_ops, 50 iterations, 21 runs)."
+    )
+    parser.add_argument("--runs", type=int, default=None,
+                        help="Default: 3 (team) or 21 (official).")
     parser.add_argument("--seed-start", type=int, default=1)
     parser.add_argument(
         "--generations", type=int, default=None,
-        help="Override the generation count (default: MaxFES / popsize = 50)."
+        help="Override the iteration count (team: 201, official: MaxFES / popsize = 50)."
+    )
+    parser.add_argument(
+        "--population", type=int, default=None,
+        help="Override the population/archive size (team: 100, official: 200*N_ops)."
     )
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
+
+    team = args.protocol == "team"
+    runs = args.runs or (3 if team else 21)
+    population = args.population or (100 if team else None)
 
     unknown = sorted(set(args.problems) - set(MMO_NAMES))
 
@@ -143,10 +169,12 @@ def main():
     jobs = []
 
     for name in args.problems:
-        generations = args.generations or get_problem(name).generations
+        generations = args.generations or (
+            201 if team else get_problem(name).generations
+        )
 
-        for run in range(args.runs):
-            jobs.append((name, args.seed_start + run, generations))
+        for run in range(runs):
+            jobs.append((name, args.seed_start + run, generations, population))
 
     if args.workers > 1:
         with get_context("fork").Pool(args.workers) as pool:
@@ -155,7 +183,7 @@ def main():
         results = [run_once(job) for job in jobs]
 
     raw_fields = [
-        "problem", "run", "seed", *INDICATORS, "CR", "PSP", "HV",
+        "problem", "run", "seed", *INDICATORS, "CR", "PSP", "HV", "GD", "spacing",
         "archive_size", "n_nondominated", "evaluations", "runtime_seconds",
     ]
     raw_rows, summary_rows = [], []
@@ -169,7 +197,7 @@ def main():
 
         summary = {"problem": name, "runs": len(runs), "n_ops": problem.n_ops}
 
-        for indicator in INDICATORS:
+        for indicator in (*INDICATORS, *EXTRA):
             for stat, value in _stats([r[indicator] for r in runs]).items():
                 summary[f"{indicator}_{stat}"] = value
 

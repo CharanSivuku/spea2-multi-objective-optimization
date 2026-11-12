@@ -95,16 +95,20 @@ def _digest(obj):
 
 
 # Digests recorded from the original implementation before the optimisation.
+# They use the legacy per-variable SBX scheme that those experiments used.
 def test_spea2_output_unchanged_zdt1():
     random.seed(7)
-    population, archive = M.spea2(20, 6, 20, 12, 0.0, 1.0, M.zdt1)
+    population, archive = M.spea2(
+        20, 6, 20, 12, 0.0, 1.0, M.zdt1, sbx_scheme="per_variable"
+    )
     assert _digest([archive, population]) == "ec12a7a1a56f0195"
 
 
 def test_spea2_output_unchanged_zdt4():
     random.seed(3)
     population, archive = M.spea2(
-        16, 4, 16, 10, [0.0] + [-5.0] * 3, [1.0] + [5.0] * 3, M.zdt4
+        16, 4, 16, 10, [0.0] + [-5.0] * 3, [1.0] + [5.0] * 3, M.zdt4,
+        sbx_scheme="per_variable"
     )
     assert _digest([archive, population]) == "1bd30843ac1e4323"
 
@@ -112,7 +116,8 @@ def test_spea2_output_unchanged_zdt4():
 def test_spea2_output_unchanged_constrained():
     random.seed(5)
     population, archive = M.spea2(
-        20, 2, 20, 12, SRINIVAS_LOWER, SRINIVAS_UPPER, srinivas, srinivas_violation
+        20, 2, 20, 12, SRINIVAS_LOWER, SRINIVAS_UPPER, srinivas, srinivas_violation,
+        sbx_scheme="per_variable"
     )
     assert _digest([archive, population]) == "b47b9ea261331e95"
 
@@ -136,3 +141,114 @@ def test_python_square_differs_from_multiplication_somewhere():
     python_squares = np.array([v ** 2 for v in values.tolist()])
 
     assert np.array_equal(python_squares, np.power(values, 2.0))
+
+
+# ---------------------------------------------------------------------------
+# SBX schemes
+# ---------------------------------------------------------------------------
+
+LOW, UP = [0.0] * 8, [1.0] * 8
+P1 = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+P2 = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]
+
+
+def test_sbx_rejects_unknown_scheme():
+    with pytest.raises(ValueError):
+        M.sbx_crossover(P1, P2, LOW, UP, scheme="nope")
+
+
+@pytest.mark.parametrize("scheme", ["deb", "per_variable"])
+def test_sbx_with_zero_probability_copies_parents(scheme):
+    random.seed(1)
+
+    for _ in range(20):
+        c1, c2 = M.sbx_crossover(P1, P2, LOW, UP, crossover_probability=0.0, scheme=scheme)
+        assert c1 == P1 and c2 == P2
+
+
+def test_sbx_deb_scheme_pair_level_probability():
+    """With pc = 0.9 about 10 % of pairs are copied unchanged (plus the pairs
+    where no variable was selected, 0.5**8); per_variable almost never copies."""
+    random.seed(2)
+    trials = 4000
+
+    def unchanged(scheme):
+        count = 0
+
+        for _ in range(trials):
+            c1, c2 = M.sbx_crossover(P1, P2, LOW, UP, scheme=scheme)
+            count += (c1 == P1 and c2 == P2)
+
+        return count / trials
+
+    deb = unchanged("deb")
+    legacy = unchanged("per_variable")
+
+    assert deb == pytest.approx(0.1 + 0.9 * 0.5 ** 8, abs=0.02)
+    assert legacy < 0.01   # all 8 variables skipped: 0.1 ** 8
+
+
+def test_sbx_deb_scheme_crosses_about_half_the_variables():
+    random.seed(3)
+    changed = 0
+    pairs = 0
+
+    for _ in range(3000):
+        c1, c2 = M.sbx_crossover(P1, P2, LOW, UP, crossover_probability=1.0)
+        # variables 4 (0.5 / 0.5) are identical in both parents and never change
+        changed += sum(1 for i in range(8) if i != 4 and (c1[i] != P1[i] or c2[i] != P2[i]))
+        pairs += 7
+
+    assert changed / pairs == pytest.approx(0.5, abs=0.02)
+
+
+@pytest.mark.parametrize("scheme", ["deb", "per_variable"])
+def test_sbx_children_stay_within_bounds(scheme):
+    random.seed(4)
+
+    for _ in range(500):
+        a = [random.random() for _ in range(8)]
+        b = [random.random() for _ in range(8)]
+        c1, c2 = M.sbx_crossover(a, b, LOW, UP, scheme=scheme)
+        assert all(0.0 <= v <= 1.0 for v in c1 + c2)
+
+
+def test_default_scheme_is_deb():
+    random.seed(7)
+    default = M.spea2(20, 6, 20, 6, 0.0, 1.0, M.zdt1)
+    random.seed(7)
+    explicit = M.spea2(20, 6, 20, 6, 0.0, 1.0, M.zdt1, sbx_scheme="deb")
+
+    assert default == explicit
+
+
+# ---------------------------------------------------------------------------
+# mutation index and the team protocol preset of the standard runner
+# ---------------------------------------------------------------------------
+
+def test_mutation_eta_changes_offspring_and_default_is_20():
+    random.seed(11)
+    default = M.spea2(20, 6, 20, 6, 0.0, 1.0, M.zdt1)
+    random.seed(11)
+    explicit = M.spea2(20, 6, 20, 6, 0.0, 1.0, M.zdt1, mutation_eta=20)
+    random.seed(11)
+    other = M.spea2(20, 6, 20, 6, 0.0, 1.0, M.zdt1, mutation_eta=10)
+
+    assert default == explicit
+    assert default != other
+
+
+def test_team_protocol_settings():
+    from experiments.run_benchmarks import _calculate_nfe, protocol_settings
+
+    for name in [f"DTLZ{i}" for i in range(1, 8)]:
+        s = protocol_settings(name, "team")
+        assert s == {"population": 200, "archive": 200, "generations": 3001, "mutation_eta": 10}
+        assert _calculate_nfe(s["population"], s["archive"], s["generations"]) == 600_200
+
+    for name in ["ZDT1", "ZDT4", "Binh3", "Tanaka", "Viennet2"]:
+        s = protocol_settings(name, "team")
+        assert s == {"population": 100, "archive": 100, "generations": 1001, "mutation_eta": 20}
+        assert _calculate_nfe(s["population"], s["archive"], s["generations"]) == 100_100
+
+    assert protocol_settings("DTLZ2", "uniform")["population"] == 100
